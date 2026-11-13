@@ -2,7 +2,7 @@ import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ShieldCheck, LogIn, LogOut, RefreshCw, Download, ArrowRight } from "lucide-react";
 import type { Session } from "@supabase/supabase-js";
-import { API, sb, api, setProviderToken, hasToken, fullAudit, reportFromAudit, explainLocal, score, validUrl, Finding, Report } from "./lib";
+import { API, sb, api, setProviderToken, hasToken, listRepos, fullAudit, reportFromAudit, explainLocal, score, validUrl, Finding, Report, Repo } from "./lib";
 import { liteAudit } from "./lite";
 import { exportReport } from "./exporters";
 import { FindingsView, H2, History, HItem, NextSteps, Coverage, Pipeline, Summary } from "./components";
@@ -21,7 +21,7 @@ export default function App() {
   const [rep, setRep] = useState<Report | null>(null), [prev, setPrev] = useState<Finding[] | null>(null);
   const [sel, setSel] = useState<string | null>(null), [flt, setFlt] = useState("all");
   const [acc, setAcc] = useState<Record<string, string>>({}), [aiMap, setAiMap] = useState<Record<string, { text: string; fb: boolean }>>({});
-  const [local, setLocal] = useState<Report[]>(loadLocal), [note, setNote] = useState("");
+  const [local, setLocal] = useState<Report[]>(loadLocal), [note, setNote] = useState(""), [repos, setRepos] = useState<Repo[]>([]);
   const busy = stage >= 0 && stage < 5;
 
   useEffect(() => {
@@ -30,6 +30,10 @@ export default function App() {
     const { data } = sb.auth.onAuthStateChange((_e, s) => { if (s?.provider_token) setProviderToken(s.provider_token); setSession(s); });
     return () => data.subscription.unsubscribe();
   }, []);
+  useEffect(() => { // repos for the dropdown: refreshed whenever the sign-in state changes
+    if (!session) { setRepos([]); return; }
+    listRepos((session.user.user_metadata as { user_name?: string })?.user_name).then(setRepos).catch(() => setRepos([]));
+  }, [session]);
   const hist = useQuery({ queryKey: ["hist"], enabled: full && !!session, queryFn: () => api<any[]>("/api/v1/history") });
 
   const show = (r: Report) => {
@@ -95,7 +99,7 @@ export default function App() {
           <span className="hidden gap-4 text-sm text-slate-500 sm:flex"><a href="#report" className="hover:text-slate-900">Report</a><a href="#history" className="hover:text-slate-900">History</a><a href="#architecture" className="hover:text-slate-900">Architecture</a></span><span className="flex-1" />
           <span className="rounded-full border border-stone-300 bg-white px-2.5 py-0.5 text-xs text-slate-500">{full && !note ? "Full scan · backend" : note ? "Lite scan · backend offline" : "Lite scan · in browser"}</span>
           {session ? (<>
-            {full && !hasToken() && <button className="ghost" title="Re-authorise GitHub with access to private repositories" onClick={() => signIn("repo read:user")}>Enable private repos</button>}
+            {!hasToken() && <button className="ghost" title="Re-authorise GitHub with access to private repositories" onClick={() => signIn("repo read:user")}>Enable private repos</button>}
             <span className="flex items-center gap-2 text-sm text-slate-600">{gh?.avatar_url && <img src={gh.avatar_url} alt="" className="h-6 w-6 rounded-full" />}<span className="hidden sm:inline">{gh?.user_name ?? "Signed in"}</span></span>
             <button className="ghost flex items-center gap-1" onClick={() => { sb?.auth.signOut(); setProviderToken(null); }}><LogOut className="h-4 w-4" />Sign out</button>
           </>) : (<>
@@ -109,7 +113,12 @@ export default function App() {
           <span className="rounded-full border border-stone-300 bg-white px-3 py-1 text-xs text-slate-500">CodeSprint 2026 · Team Limitless Arise</span>
           <h1 className="mt-5 text-5xl font-bold tracking-tighter sm:text-6xl">Know before <span className="text-slate-400">you ship.</span></h1>
           <p className="mx-auto mt-4 max-w-xl text-lg text-slate-500">Evidence-backed repository audits, prioritised findings, grounded AI guidance, and a rescan that proves your fixes worked.</p>
-          <form className="mx-auto mt-7 flex max-w-xl gap-2 rounded-2xl border border-stone-200 bg-white p-2 shadow-sm" onSubmit={(e) => { e.preventDefault(); run(url); }}>
+          <form className="mx-auto mt-7 flex max-w-2xl flex-wrap gap-2 sm:flex-nowrap rounded-2xl border border-stone-200 bg-white p-2 shadow-sm" onSubmit={(e) => { e.preventDefault(); run(url); }}>
+            {repos.length > 0 && (
+              <select aria-label="Choose one of your repositories" value="" onChange={(e) => e.target.value && setUrl("https://github.com/" + e.target.value)} className="w-full rounded-xl border border-stone-200 bg-stone-50 px-2 py-2 text-sm outline-none sm:w-44">
+                <option value="">Your repos ({repos.length})</option>
+                {repos.map((r) => <option key={r.full_name} value={r.full_name}>{r.full_name}{r.private ? " (private)" : ""}</option>)}
+              </select>)}
             <input className="min-w-0 flex-1 bg-transparent px-3 outline-none" placeholder="https://github.com/owner/repo" aria-label="GitHub repository URL" value={url} onChange={(e) => setUrl(e.target.value)} />
             <button className="btn flex items-center gap-1" disabled={busy}>{busy ? "Scanning…" : <>Run preflight <ArrowRight className="h-4 w-4" /></>}</button>
           </form>

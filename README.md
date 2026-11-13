@@ -18,16 +18,13 @@ frontend-vanilla/   the earlier plain HTML/CSS/JS version (optional, can be dele
 backend/    main.py (API) core.py (rules, score) scanners.py ai.py reports.py pdf.py schema.sql tests/
 ```
 
-## Run it
-**Quick start, no keys needed (Lite scan):** `cd frontend && npm install && npm run dev`, open http://localhost:5173 and paste a public GitHub URL. Lite mode runs in the browser against the public GitHub, OSV and OpenSSF Scorecard APIs (real data; GitHub allows 60 requests per hour without a token). Trivy and the Git-history secret scan are listed as "needs backend", never as clean. History is kept in your browser.
-
-**Full scan (backend):**
-1. Run `backend/schema.sql` in the Supabase SQL editor.
-2. `cp .env.example .env` at the project root and fill it in. This is the only env file: the backend, the frontend (`VITE_` values only) and Docker all read it. For AI, put a Groq key in `AI_API_KEY` (or point `AI_BASE_URL` and `AI_MODEL` at any OpenAI-compatible API).
-3. GitHub sign-in / sign-up (Supabase Auth): in GitHub, Settings > Developer settings > OAuth Apps, create an app with callback URL `https://YOUR-PROJECT.supabase.co/auth/v1/callback`. In Supabase, Authentication > Providers > GitHub: enable it and paste the client ID and secret. Under Authentication > URL Configuration, add `http://localhost:5173` (and your deployed URL) to the redirect URLs. The single "Continue with GitHub" button both signs in and registers: the first sign-in creates the account. Sign-in asks only for `read:user user:email`; the "Enable private repos" button re-authorises with `repo` access when needed.
-4. Backend: `cd backend && pip install -r requirements.txt && uvicorn main:app --reload`
-5. Frontend as above. Setting `VITE_API_URL` switches the UI from Lite to Full.
-6. Or everything in Docker: `docker compose up --build`, then open http://localhost:8080
+## Run it (all steps, in order)
+1. **Quick start, no keys (Lite scan):** `cd frontend && npm install && npm run dev`, open http://localhost:5173, paste a public GitHub URL. It runs in the browser against the GitHub, OSV and OpenSSF Scorecard APIs. Trivy and the Git-history scan show as "needs backend".
+2. **GitHub login (Supabase):** create a GitHub OAuth App (callback `https://YOUR-PROJECT.supabase.co/auth/v1/callback`); in Supabase enable Authentication > Providers > GitHub and add `http://localhost:5173` (and your domain) under URL Configuration > Redirect URLs. The single **Continue with GitHub** button signs in or registers.
+3. **Env:** `cp .env.example .env` at the project root (the only env file). Fill `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` for login. Restart `npm run dev`.
+4. **Repo picker:** after login a dropdown lists your repos next to the URL field (public by default; **Enable private repos** adds private ones and lets the Lite scan read them).
+5. **Full scan (optional):** run `backend/schema.sql` in Supabase, fill the backend values and `AI_API_KEY` in `.env`, then `cd backend && pip install -r requirements.txt && uvicorn main:app --reload`, and set `VITE_API_URL=http://localhost:8000`. Or `docker compose up --build` (http://localhost:8080).
+6. **Go live on your .xyz domain:** follow `docs/deploy.md`.
 
 ## Known limitations
 | Limitation | Handling |

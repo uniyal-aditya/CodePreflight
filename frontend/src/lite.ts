@@ -1,13 +1,13 @@
 /* Lite audit: runs in the browser against public GitHub, OSV and OpenSSF Scorecard APIs. Real data, no backend, no keys.
    It cannot run Trivy or the Git-history scan; those rows are reported as "needs backend", never as clean. */
-import { Finding, Report, Sev, SEV, hash, pctOf } from "./lib";
+import { Finding, Report, Sev, SEV, hash, pctOf, getToken } from "./lib";
 
 const GH = "https://api.github.com";
 const mk = (rule: string, cat: string, sev: Sev, t: string, file: string, ev: string, fix: string, src: string, conf = "high"): Finding =>
   ({ id: "F-" + hash(`${rule}|${file}|${ev}`), uid: "", cat, sev, conf, t, file, line: null, ev, src, rule, fix, ai: "", st: "open" });
 
 async function gj(u: string) {
-  const r = await fetch(u, { headers: { Accept: "application/vnd.github+json" } });
+  const t = getToken(), r = await fetch(u, { headers: { Accept: "application/vnd.github+json", ...(t ? { Authorization: "Bearer " + t } : {}) } });
   if (r.status === 403 || r.status === 429) throw new Error("GitHub rate limit reached (60 requests per hour without a token). Try again later or use the full backend.");
   if (r.status === 404) throw new Error("Repository not found, or it is private. Private repos need the full backend with GitHub login.");
   if (!r.ok) throw new Error(`GitHub error ${r.status}`);
@@ -32,7 +32,7 @@ export function rules(paths: string[]): [Finding[], Record<string, string>] {
 
 type Dep = [string, string, string, string];
 async function deps(o: string, n: string, sha: string, blobs: any[]): Promise<Dep[]> {
-  const out: Dep[] = [], get = async (f: string) => { const b = blobs.find((x) => x.path === f); if (!b || b.size > 3_000_000) return null; const r = await fetch(`https://raw.githubusercontent.com/${o}/${n}/${sha}/${f}`); if (!r.ok) throw new Error("raw"); return r.text(); };
+  const out: Dep[] = [], get = async (f: string) => { const b = blobs.find((x) => x.path === f); if (!b || b.size > 3_000_000) return null; const t = getToken(), r = t ? await fetch(`${GH}/repos/${o}/${n}/contents/${f}?ref=${sha}`, { headers: { Accept: "application/vnd.github.raw+json", Authorization: "Bearer " + t } }) : await fetch(`https://raw.githubusercontent.com/${o}/${n}/${sha}/${f}`); if (!r.ok) throw new Error("raw"); return r.text(); };
   const req = await get("requirements.txt");
   for (const l of (req || "").split("\n")) { const m = l.match(/^\s*([A-Za-z0-9_.-]+)==([A-Za-z0-9_.+-]+)/); if (m) out.push(["PyPI", m[1], m[2], "requirements.txt"]); }
   const lock = await get("package-lock.json");
@@ -67,7 +67,7 @@ export async function liteAudit(url: string, stage: (n: number) => void): Promis
   if (!m) throw new Error("Enter a valid GitHub URL: https://github.com/owner/repo");
   const [, o, n] = m; stage(0);
   const info = await gj(`${GH}/repos/${o}/${n}`);
-  if (info.private) throw new Error("Private repository: use the full backend with GitHub login.");
+  if (info.private && !getToken()) throw new Error("Private repository: sign in with GitHub and click Enable private repos first.");
   stage(1);
   const sha: string = (await gj(`${GH}/repos/${o}/${n}/commits/${info.default_branch}`)).sha; // pin the audit to one commit
   const tree = await gj(`${GH}/repos/${o}/${n}/git/trees/${sha}?recursive=1`);
@@ -75,9 +75,9 @@ export async function liteAudit(url: string, stage: (n: number) => void): Promis
   stage(2);
   const [fs, cov] = rules(paths); if (tree.truncated) cov.tree = "unknown";
   const ds = await deps(o, n, sha, blobs).catch(() => null);
-  const [ov, sc] = await Promise.allSettled([ds && ds.length ? osv(ds) : Promise.resolve([] as Finding[]), scorecard(o, n)]);
+  const [ov, sc] = await Promise.allSettled([ds && ds.length ? osv(ds) : Promise.resolve([] as Finding[]), info.private ? Promise.reject(new Error("private")) : scorecard(o, n)]);
   cov.osv = ds === null || ov.status === "rejected" ? "failed" : ds.length ? "ran" : "unknown";
-  cov.scorecard = sc.status === "fulfilled" ? "ran" : "unknown";
+  cov.scorecard = info.private ? "not covered (private repo)" : sc.status === "fulfilled" ? "ran" : "unknown";
   cov.trivy = "needs backend"; cov["secrets-history"] = "needs backend";
   stage(3);
   const all = [...fs, ...(ov.status === "fulfilled" ? ov.value : []), ...(sc.status === "fulfilled" ? sc.value : [])];

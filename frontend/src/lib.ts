@@ -28,6 +28,17 @@ export function score(F: Finding[], acc: Record<string, string>) {
 let ghToken: string | null = null; // GitHub token lives in memory only
 export const setProviderToken = (t: string | null) => { ghToken = t; };
 export const hasToken = () => !!ghToken;
+export const getToken = () => ghToken;
+export type Repo = { full_name: string; private: boolean };
+/** The signed-in user's repositories. With a GitHub token (after sign-in) this includes private repos when `repo` access was granted; otherwise it lists their public repos. */
+export async function listRepos(login?: string): Promise<Repo[]> {
+  const t = ghToken;
+  const u = t ? "https://api.github.com/user/repos?per_page=100&sort=pushed&affiliation=owner,collaborator,organization_member" : login ? `https://api.github.com/users/${encodeURIComponent(login)}/repos?per_page=100&sort=pushed` : null;
+  if (!u) return [];
+  const r = await fetch(u, { headers: { Accept: "application/vnd.github+json", ...(t ? { Authorization: "Bearer " + t } : {}) } });
+  if (!r.ok) return [];
+  return (await r.json()).map((x: any) => ({ full_name: x.full_name, private: !!x.private }));
+}
 async function headers() {
   const h: Record<string, string> = { "Content-Type": "application/json" };
   const s = sb ? (await sb.auth.getSession()).data.session : null;
