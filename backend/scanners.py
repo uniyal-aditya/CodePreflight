@@ -1,0 +1,98 @@
+"""Scanner adapters. Every adapter returns (findings, status). Static inspection only: nothing from the repo is executed."""
+import os, re, json, subprocess
+from core import finding, DEDUCT, ORDER
+
+def trivy(path):
+    try:
+        r = subprocess.run(["trivy", "fs", "--scanners", "vuln,secret,misconfig", "--format", "json", "--quiet", path], capture_output=True, text=True, timeout=180)
+        data = json.loads(r.stdout or "{}")
+    except FileNotFoundError: return [], "unknown"  # tool missing: unknown, never clean
+    except (subprocess.TimeoutExpired, json.JSONDecodeError): return [], "failed"
+    out, sv = [], lambda s: s.lower() if s.lower() in DEDUCT else "low"
+    for res in data.get("Results", []):
+        for v in res.get("Vulnerabilities") or []:
+            out.append(finding(v["VulnerabilityID"], "Dependencies", sv(v["Severity"]), f'{v["PkgName"]} {v["InstalledVersion"]}', res["Target"], v.get("Title", ""), f'Upgrade to {v.get("FixedVersion") or "a patched version"}.', "trivy", v["VulnerabilityID"]))
+        for s in res.get("Secrets") or []:
+            from core import mask
+            out.append(finding(s["RuleID"], "Security", "critical", s["Title"], res["Target"], mask(s.get("Match", "secret")), "Rotate the credential, move it to a secret store, purge Git history.", "trivy", s["RuleID"], line=s.get("StartLine")))
+        for m in res.get("Misconfigurations") or []:
+            out.append(finding(m["ID"], "Security", sv(m["Severity"]), m["Title"], res["Target"], m.get("Message", ""), m.get("Resolution", ""), "trivy", m["ID"]))
+    return out, "ran"
+
+def _deps(path):
+    def safe(p): return os.path.isfile(p) and not os.path.islink(p) and os.path.getsize(p) < 5_000_000  # no symlink escapes
+    out, req, lock = [], os.path.join(path, "requirements.txt"), os.path.join(path, "package-lock.json")
+    if safe(req):
+        for line in open(req, errors="ignore"):
+            m = re.match(r"^\s*([A-Za-z0-9_.-]+)==([A-Za-z0-9_.+-]+)", line)
+            if m: out.append(("PyPI", m[1], m[2], "requirements.txt"))
+    if safe(lock):
+        try: pk = json.load(open(lock)).get("packages", {})
+        except ValueError: pk = {}
+        for k, v in list(pk.items())[:2000]:
+            if k.startswith("node_modules/") and v.get("version"): out.append(("npm", k.split("node_modules/")[-1], v["version"], "package-lock.json"))
+    return out[:1000]
+
+def osv(path):
+    import httpx  # imported lazily so the other scanners and the tests need no HTTP library
+    deps = _deps(path)
+    if not deps: return [], "unknown"  # no resolvable versions: not a clean result
+    SEV = {"CRITICAL": "critical", "HIGH": "high", "MODERATE": "medium", "MEDIUM": "medium", "LOW": "low"}
+    out, detail = [], 0
+    try:
+        for i in range(0, len(deps), 500):
+            chunk = deps[i:i + 500]
+            res = httpx.post("https://api.osv.dev/v1/querybatch", json={"queries": [{"package": {"name": n, "ecosystem": e}, "version": v} for e, n, v, _ in chunk]}, timeout=30).json()["results"]
+            for (e, n, v, f), r in zip(chunk, res):
+                for vuln in (r.get("vulns") or [])[:3]:
+                    sev, summ = "medium", ""
+                    if detail < 15:
+                        detail += 1
+                        d = httpx.get(f"https://api.osv.dev/v1/vulns/{vuln['id']}", timeout=15).json()
+                        sev = SEV.get((d.get("database_specific") or {}).get("severity", "").upper(), "medium"); summ = d.get("summary", "")[:120]
+                    out.append(finding(vuln["id"], "Dependencies", sev, f"{n} {v}", f, f"{vuln['id']}: {summ}", "Upgrade to a patched version listed in the advisory.", "osv", vuln["id"], conf="high" if detail <= 15 else "medium"))
+    except (httpx.HTTPError, KeyError, ValueError): return out, "failed"
+    return out, "ran"
+
+RISK = {"Dangerous-Workflow": ("Security", "critical"), "Token-Permissions": ("Security", "high"), "Branch-Protection": ("Security", "high"),
+        "Pinned-Dependencies": ("Dependencies", "medium"), "Code-Review": ("Engineering hygiene", "medium"), "Maintained": ("Maintenance", "medium"), "Security-Policy": ("Documentation", "low")}
+
+def scorecard(owner, name):  # public repos only
+    try:
+        r = subprocess.run(["scorecard", f"--repo=github.com/{owner}/{name}", "--format=json"], capture_output=True, text=True, timeout=120,
+                           env={**os.environ, "GITHUB_AUTH_TOKEN": os.getenv("GITHUB_TOKEN", "")})
+        checks = json.loads(r.stdout or "{}").get("checks", [])
+    except FileNotFoundError: return [], "unknown"
+    except (subprocess.TimeoutExpired, json.JSONDecodeError): return [], "failed"
+    out = []
+    for c in checks:
+        if c["name"] not in RISK or not 0 <= c["score"] < 5: continue  # -1 means could not be evaluated, so it is not treated as a pass or a fail
+        cat, sev = RISK[c["name"]]
+        if c["score"] >= 3: sev = ORDER[min(ORDER.index(sev) + 1, 4)]
+        out.append(finding(c["name"], cat, sev, f'Scorecard: {c["name"]} scored {c["score"]}/10', "(repository)", (c.get("reason") or "")[:140], f'See the OpenSSF Scorecard guidance for {c["name"]}.', "scorecard", c["name"], conf="medium"))
+    return out, "ran"
+
+HIST = {"aws-access-key-id": r"\bAKIA[0-9A-Z]{16}\b", "github-token": r"\bgh[pousr]_[A-Za-z0-9]{36,}\b", "private-key": r"-----BEGIN (?:RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----",
+        "slack-token": r"\bxox[baprs]-[A-Za-z0-9-]{10,}\b", "google-api-key": r"\bAIza[0-9A-Za-z_\-]{35}\b"}
+
+def history(path, max_commits=100, max_bytes=20_000_000):
+    """Secrets that were committed in the last N commits, even if they were later removed. Pattern based, so confidence is medium."""
+    from core import mask
+    try:  # read-only git log of an untrusted repo: external diff and textconv drivers are disabled
+        r = subprocess.run(["git", "-C", path, "log", "-p", "--no-color", "--no-ext-diff", "--no-textconv", "-n", str(max_commits), "--format=commit %H"],
+                           capture_output=True, text=True, errors="replace", timeout=120)
+    except FileNotFoundError: return [], "unknown"
+    except subprocess.TimeoutExpired: return [], "failed"
+    if r.returncode != 0: return [], "failed"
+    out, cur, file, seen = [], "", "", set()
+    for line in r.stdout[:max_bytes].splitlines():
+        if line.startswith("commit "): cur = line[7:14]; continue
+        if line.startswith("+++ b/"): file = line[6:]; continue
+        if not line.startswith("+") or line.startswith("+++"): continue
+        for rid, rx in HIST.items():
+            m = re.search(rx, line)
+            if m and (rid, file, m.group()) not in seen and len(out) < 50:
+                seen.add((rid, file, m.group()))
+                out.append(finding(rid, "Security", "critical", f"Secret in Git history: {rid}", file, f"commit {cur}: {mask(m.group())}",
+                                   "Revoke and rotate the credential. Deleting it from current files is not enough, it stays in history.", "git-history", rid + "-history", conf="medium"))
+    return out, "ran"
