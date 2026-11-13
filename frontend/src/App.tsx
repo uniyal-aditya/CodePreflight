@@ -99,8 +99,7 @@ export default function App() {
             <span className="flex items-center gap-2 text-sm text-slate-600">{gh?.avatar_url && <img src={gh.avatar_url} alt="" className="h-6 w-6 rounded-full" />}<span className="hidden sm:inline">{gh?.user_name ?? "Signed in"}</span></span>
             <button className="ghost flex items-center gap-1" onClick={() => { sb?.auth.signOut(); setProviderToken(null); }}><LogOut className="h-4 w-4" />Sign out</button>
           </>) : (<>
-            <button className="ghost" onClick={() => signIn()}>Sign in</button>
-            <button className="btn flex items-center gap-1 !px-3 !py-1.5 text-sm" title="GitHub creates your account the first time you sign in" onClick={() => signIn()}><LogIn className="h-4 w-4" />Sign up with GitHub</button>
+            <button className="btn flex items-center gap-1 !px-3 !py-1.5 text-sm" title="Signs you in, or creates your account the first time" onClick={() => signIn()}><LogIn className="h-4 w-4" />Continue with GitHub</button>
           </>)}
         </div>
       </nav>
@@ -115,7 +114,7 @@ export default function App() {
             <button className="btn flex items-center gap-1" disabled={busy}>{busy ? "Scanning…" : <>Run preflight <ArrowRight className="h-4 w-4" /></>}</button>
           </form>
           <p className="mt-3 text-xs text-slate-500">Try: {EXAMPLES.map((x) => <button key={x} disabled={busy} onClick={() => example(x)} className="mx-1 underline decoration-stone-300 underline-offset-2 hover:text-slate-900">{x}</button>)}</p>
-          {!session && <p className="mt-2 text-xs text-slate-500"><button onClick={() => signIn()} className="underline underline-offset-2 hover:text-slate-900">Sign in with GitHub</button> to save your history and scan private repos.</p>}
+          {!session && <p className="mt-2 text-xs text-slate-500">Use Continue with GitHub (top right) to save your history and scan private repos.</p>}
           <p role="alert" className="mt-3 min-h-5 text-sm text-red-700">{err}</p>
           {note && <p className="mx-auto max-w-xl text-xs text-amber-700">{note}</p>}
           {busy && <Pipeline stage={stage} />}
