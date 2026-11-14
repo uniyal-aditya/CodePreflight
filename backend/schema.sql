@@ -3,7 +3,7 @@ create table repositories(id uuid primary key default gen_random_uuid(), owner t
 create table audits(id uuid primary key default gen_random_uuid(), user_id uuid references auth.users, repository_id uuid references repositories,
   commit_sha text not null, profile text default 'standard', status text default 'queued', coverage jsonb, score int, risk text,
   started_at timestamptz default now(), completed_at timestamptz);
-create table findings(id uuid primary key default gen_random_uuid(), audit_id uuid references audits on delete cascade, code text, rule_id text,
+create table findings(id uuid primary key default gen_random_uuid(), audit_id uuid references audits on delete cascade, code text, title text, rule_id text,
   category text, severity text check (severity in ('critical','high','medium','low','info')), confidence text, file_path text, line_number int,
   evidence text, recommendation text, source text, fingerprint text, status text default 'open');
 create table finding_status_history(id bigserial primary key, finding_id uuid references findings, status text, reason text not null, changed_by uuid, at timestamptz default now());
@@ -18,3 +18,9 @@ alter table audits add column if not exists is_private boolean default false;
 alter table repositories enable row level security; alter table scan_tools enable row level security;
 create policy own_repos on repositories for select using (id in (select repository_id from audits where user_id = auth.uid()));
 alter table findings add column if not exists ai jsonb;  -- cached AI explanation
+
+-- Migration for databases created from an older version of this file (safe to run more than once)
+alter table findings add column if not exists title text;
+alter table findings add column if not exists ai jsonb;
+alter table audits add column if not exists is_private boolean default false;
+notify pgrst, 'reload schema';  -- makes Supabase's API pick up the new columns immediately

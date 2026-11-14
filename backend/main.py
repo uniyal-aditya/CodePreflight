@@ -25,7 +25,8 @@ async def unhandled(request: Request, exc: Exception):
     origin = request.headers.get("origin", "")
     return JSONResponse({"detail": f"Server error ({type(exc).__name__}). Check the backend logs."}, status_code=500, headers={"Access-Control-Allow-Origin": origin, "Vary": "Origin"} if origin in ORIGINS else {})
 db = create_client(os.environ["SUPABASE_URL"], os.environ["SUPABASE_SERVICE_KEY"])
-GH, MAX_KB, HITS = "https://api.github.com", 200_000, defaultdict(list)
+GH, HITS = "https://api.github.com", defaultdict(list)
+MAX_KB = int(os.getenv("MAX_REPO_MB", "200")) * 1000  # GitHub reports repo size in KB (includes full history)
 
 class AuditIn(BaseModel):
     repository_url: str
@@ -95,7 +96,7 @@ def create(a: AuditIn, bg: BackgroundTasks, request: Request, authorization: str
     if r.status_code != 200: raise HTTPException(404, "Repository not found or your account has no access" if tok else "Repository not found. If it is private, sign in with GitHub first.")
     info = r.json()
     if info.get("private") and not tok: raise HTTPException(403, "Private repository: sign in with GitHub")
-    if info.get("size", 0) > MAX_KB: raise HTTPException(413, "Repository exceeds the size limit for this scan profile")
+    if info.get("size", 0) > MAX_KB: raise HTTPException(413, f"This repository is about {info['size'] // 1000} MB, over this server's {MAX_KB // 1000} MB scan limit (the MAX_REPO_MB variable).")
     branch = a.branch or info["default_branch"]
     sha = httpx.get(f"{GH}/repos/{owner}/{name}/commits/{branch}", headers=hdr(tok), timeout=15).json()["sha"]  # pin the audit to a commit
     repo = db.table("repositories").upsert({"owner": owner, "name": name, "url": f"https://github.com/{owner}/{name}", "default_branch": branch}, on_conflict="url").execute().data[0]

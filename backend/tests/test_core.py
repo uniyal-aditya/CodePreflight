@@ -85,3 +85,11 @@ def test_history_finds_removed_secret(tmp_path):
     (tmp_path / "cfg.py").write_text("K = None\n"); g("commit", "-qam", "remove")
     fs, st = scanners.history(str(tmp_path))
     assert st == "ran" and len(fs) == 1 and key not in fs[0]["evidence"] and fs[0]["severity"] == "critical"
+
+def test_schema_has_every_findings_column_the_scanners_write():
+    import re
+    sql = open(os.path.join(os.path.dirname(os.path.dirname(__file__)), "schema.sql")).read()
+    body = re.search(r"create table findings\((.*?)\);", sql, re.S).group(1)
+    cols = set(re.findall(r"(?:^|[,(\s])(\w+)\s+(?:text|int|uuid|jsonb|boolean|timestamptz)\b", body)) | set(re.findall(r"alter table findings add column if not exists (\w+)", sql))
+    f = core.finding("X", "Security", "high", "t", "a.py", "e", "r", "trivy", "X"); f.update(audit_id="x", status="open")
+    assert set(f) <= cols, f"findings table is missing columns: {set(f) - cols}"
