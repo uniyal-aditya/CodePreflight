@@ -1,11 +1,12 @@
 """CodePreflight API. Run: uvicorn main:app --reload
 Security: repo content is untrusted and never executed; scanners get argument lists (no shell);
 secrets are masked before storage/AI; GitHub tokens live in memory only; every audit is owner-checked."""
-import os, time, base64, subprocess, tempfile, httpx
+import os, time, base64, logging, subprocess, tempfile, httpx
 from datetime import datetime, timezone
 from collections import defaultdict
 from fastapi import FastAPI, BackgroundTasks, HTTPException, Header, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from supabase import create_client
 import core, scanners, ai, reports
@@ -14,7 +15,15 @@ from dotenv import load_dotenv
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")  # the one shared .env at the project root
 
 app = FastAPI(title="CodePreflight")
-app.add_middleware(CORSMiddleware, allow_origins=os.getenv("ALLOWED_ORIGINS", "http://localhost:5173,http://localhost:8080").split(","), allow_methods=["GET", "POST"], allow_headers=["*"])
+ORIGINS = [o.strip() for o in os.getenv("ALLOWED_ORIGINS", "http://localhost:5173,http://localhost:8080").split(",") if o.strip()]
+app.add_middleware(CORSMiddleware, allow_origins=ORIGINS, allow_methods=["GET", "POST"], allow_headers=["*"])
+
+@app.exception_handler(Exception)
+async def unhandled(request: Request, exc: Exception):
+    """Without this, a crash returns a 500 with no CORS headers, and the browser reports it as a generic network error."""
+    logging.getLogger("codepreflight").exception("Unhandled error on %s", request.url.path)
+    origin = request.headers.get("origin", "")
+    return JSONResponse({"detail": f"Server error ({type(exc).__name__}). Check the backend logs."}, status_code=500, headers={"Access-Control-Allow-Origin": origin, "Vary": "Origin"} if origin in ORIGINS else {})
 db = create_client(os.environ["SUPABASE_URL"], os.environ["SUPABASE_SERVICE_KEY"])
 GH, MAX_KB, HITS = "https://api.github.com", 200_000, defaultdict(list)
 
@@ -40,7 +49,7 @@ def own(audit_id, uid):  # the service key bypasses RLS, so ownership is enforce
     if a.get("user_id") and a["user_id"] != uid: raise HTTPException(404, "Audit not found")
     return a
 
-def limit(ip, n=10, per=3600):
+def limit(ip, n=int(os.getenv("RATE_LIMIT_PER_HOUR", "10")), per=3600):  # audits per client IP per hour; raise it for demos
     now = time.time(); HITS[ip] = [t for t in HITS[ip] if now - t < per]
     if len(HITS[ip]) >= n: raise HTTPException(429, "Too many audits. Try again later.")
     HITS[ip].append(now)

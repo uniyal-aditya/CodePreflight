@@ -57,16 +57,15 @@ def osv(path):
 RISK = {"Dangerous-Workflow": ("Security", "critical"), "Token-Permissions": ("Security", "high"), "Branch-Protection": ("Security", "high"),
         "Pinned-Dependencies": ("Dependencies", "medium"), "Code-Review": ("Engineering hygiene", "medium"), "Maintained": ("Maintenance", "medium"), "Security-Policy": ("Documentation", "low")}
 
-def scorecard(owner, name):  # public repos only
-    try:
-        r = subprocess.run(["scorecard", f"--repo=github.com/{owner}/{name}", "--format=json"], capture_output=True, text=True, timeout=120,
-                           env={**os.environ, "GITHUB_AUTH_TOKEN": os.getenv("GITHUB_TOKEN", "")})
-        checks = json.loads(r.stdout or "{}").get("checks", [])
-    except FileNotFoundError: return [], "unknown"
-    except (subprocess.TimeoutExpired, json.JSONDecodeError): return [], "failed"
+def scorecard(owner, name):  # public repos only; uses Scorecard's public REST API, so no binary is needed
+    import httpx
+    try: r = httpx.get(f"https://api.securityscorecards.dev/projects/github.com/{owner}/{name}", timeout=20)
+    except httpx.HTTPError: return [], "failed"
+    if r.status_code == 404: return [], "unknown"  # Scorecard has no stored result for this repo: not a pass, not a fail
+    if r.status_code != 200: return [], "failed"
     out = []
-    for c in checks:
-        if c["name"] not in RISK or not 0 <= c["score"] < 5: continue  # -1 means could not be evaluated, so it is not treated as a pass or a fail
+    for c in r.json().get("checks", []):
+        if c["name"] not in RISK or not 0 <= c["score"] < 5: continue  # -1 means could not be evaluated
         cat, sev = RISK[c["name"]]
         if c["score"] >= 3: sev = ORDER[min(ORDER.index(sev) + 1, 4)]
         out.append(finding(c["name"], cat, sev, f'Scorecard: {c["name"]} scored {c["score"]}/10', "(repository)", (c.get("reason") or "")[:140], f'See the OpenSSF Scorecard guidance for {c["name"]}.', "scorecard", c["name"], conf="medium"))

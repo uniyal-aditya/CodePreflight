@@ -42,6 +42,22 @@ class OpenAICompatProvider:
         r.raise_for_status()  # 429 (free-tier limit) raises, and explain() falls back
         return parse_json(r.json()["choices"][0]["message"]["content"])
 
+class AdaptionProvider:
+    """Adaption Responses API (POST /api/v1/responses, Bearer key). Set AI_PROVIDER=adaption, AI_API_KEY, AI_MODEL (ids: GET /api/v1/models)."""
+    def __init__(self):
+        self.base = os.getenv("AI_BASE_URL", "https://api.prod.adaptionlabs.ai").rstrip("/")
+        self.key, self.model = os.environ["AI_API_KEY"], os.getenv("AI_MODEL", "deepseek-v4-flash")
+        self.name = f"adaption:{self.model}"
+    def explain(self, f):
+        import httpx
+        r = httpx.post(self.base + "/api/v1/responses", headers={"Authorization": "Bearer " + self.key}, timeout=60,
+                       json={"model": self.model, "instructions": SYSTEM, "input": f"<finding>{json.dumps(f)}</finding>", "temperature": 0.2,
+                             "max_output_tokens": int(os.getenv("AI_MAX_TOKENS", "1500")), "store": False})  # store=false: Adaption keeps nothing
+        r.raise_for_status()
+        j = r.json()
+        if j.get("status") not in (None, "completed"): raise RuntimeError(f"response {j.get('status')}")
+        return parse_json(j["output_text"])
+
 def grounded(out: dict, f: dict) -> bool:
     """Reject output that invents versions/CVEs or line numbers not present in the finding."""
     if out.get("finding_id") != f["id"] or not isinstance(out.get("steps"), list) or not isinstance(out.get("explanation"), str): return False
@@ -51,7 +67,8 @@ def grounded(out: dict, f: dict) -> bool:
     return all(m == str(f["line_number"]) for m in re.findall(r"(?i)line (\d+)", text))
 
 def provider():
-    return OpenAICompatProvider() if os.getenv("AI_API_KEY") else TemplateProvider()
+    if not os.getenv("AI_API_KEY"): return TemplateProvider()
+    return AdaptionProvider() if os.getenv("AI_PROVIDER", "").lower() == "adaption" else OpenAICompatProvider()
 
 def explain(finding: dict, p=None) -> dict:
     f, p = redact(finding), p or provider()

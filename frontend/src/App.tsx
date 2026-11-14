@@ -1,10 +1,11 @@
 import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ShieldCheck, LogIn, LogOut, RefreshCw, Download, ArrowRight } from "lucide-react";
+import { ShieldCheck, LogIn, RefreshCw, Download, ArrowRight } from "lucide-react";
 import type { Session } from "@supabase/supabase-js";
-import { API, sb, api, setProviderToken, hasToken, listRepos, fullAudit, reportFromAudit, explainLocal, score, validUrl, Finding, Report, Repo } from "./lib";
+import { API, sb, api, setProviderToken, listRepos, fullAudit, reportFromAudit, explainLocal, score, validUrl, Finding, Report, Repo } from "./lib";
 import { liteAudit } from "./lite";
 import { exportReport } from "./exporters";
+import { RepoPicker, UserMenu } from "./RepoPicker";
 import { FindingsView, H2, History, HItem, NextSteps, Coverage, Pipeline, Summary } from "./components";
 
 const Info = lazy(() => import("./info").then((m) => ({ default: m.Info }))); // loaded after first paint
@@ -21,7 +22,7 @@ export default function App() {
   const [rep, setRep] = useState<Report | null>(null), [prev, setPrev] = useState<Finding[] | null>(null);
   const [sel, setSel] = useState<string | null>(null), [flt, setFlt] = useState("all");
   const [acc, setAcc] = useState<Record<string, string>>({}), [aiMap, setAiMap] = useState<Record<string, { text: string; fb: boolean }>>({});
-  const [local, setLocal] = useState<Report[]>(loadLocal), [note, setNote] = useState(""), [repos, setRepos] = useState<Repo[]>([]);
+  const [local, setLocal] = useState<Report[]>(loadLocal), [note, setNote] = useState(""), [repos, setRepos] = useState<Repo[]>([]), [repoScope, setRepoScope] = useState<boolean | null>(null);
   const busy = stage >= 0 && stage < 5;
 
   useEffect(() => {
@@ -31,8 +32,8 @@ export default function App() {
     return () => data.subscription.unsubscribe();
   }, []);
   useEffect(() => { // repos for the dropdown: refreshed whenever the sign-in state changes
-    if (!session) { setRepos([]); return; }
-    listRepos((session.user.user_metadata as { user_name?: string })?.user_name).then(setRepos).catch(() => setRepos([]));
+    if (!session) { setRepos([]); setRepoScope(null); return; }
+    listRepos((session.user.user_metadata as { user_name?: string })?.user_name).then((x) => { setRepos(x.repos); setRepoScope(x.repoScope); }).catch(() => { setRepos([]); setRepoScope(null); });
   }, [session]);
   const hist = useQuery({ queryKey: ["hist"], enabled: full && !!session, queryFn: () => api<any[]>("/api/v1/history") });
 
@@ -49,7 +50,7 @@ export default function App() {
       try { r = full ? await fullAudit(u, setStage) : await liteAudit(u, setStage); }
       catch (e) { // network failure only (not an API error): fall back to the in-browser Lite scan
         if (!(full && e instanceof TypeError)) throw e;
-        setNote(`Backend not reachable at ${API}, so a Lite scan ran instead. Start the API (uvicorn main:app --reload) or leave VITE_API_URL empty in .env.`);
+        setNote(`Could not reach the backend at ${API} (it may be asleep, blocked by CORS, or it crashed). A Lite scan ran instead. Details: browser DevTools > Network.`);
         setStage(0); r = await liteAudit(u, setStage);
       }
       show(r); setStage(5);
@@ -98,13 +99,9 @@ export default function App() {
           <a href="#top" className="flex items-center gap-2"><ShieldCheck className="h-5 w-5" /><b className="tracking-tight">CodePreflight</b></a>
           <span className="hidden gap-4 text-sm text-slate-500 sm:flex"><a href="#report" className="hover:text-slate-900">Report</a><a href="#history" className="hover:text-slate-900">History</a><a href="#architecture" className="hover:text-slate-900">Architecture</a></span><span className="flex-1" />
           <span className="rounded-full border border-stone-300 bg-white px-2.5 py-0.5 text-xs text-slate-500">{full && !note ? "Full scan · backend" : note ? "Lite scan · backend offline" : "Lite scan · in browser"}</span>
-          {session ? (<>
-            {!hasToken() && <button className="ghost" title="Re-authorise GitHub with access to private repositories" onClick={() => signIn("repo read:user")}>Enable private repos</button>}
-            <span className="flex items-center gap-2 text-sm text-slate-600">{gh?.avatar_url && <img src={gh.avatar_url} alt="" className="h-6 w-6 rounded-full" />}<span className="hidden sm:inline">{gh?.user_name ?? "Signed in"}</span></span>
-            <button className="ghost flex items-center gap-1" onClick={() => { sb?.auth.signOut(); setProviderToken(null); }}><LogOut className="h-4 w-4" />Sign out</button>
-          </>) : (<>
-            <button className="btn flex items-center gap-1 !px-3 !py-1.5 text-sm" title="Signs you in, or creates your account the first time" onClick={() => signIn()}><LogIn className="h-4 w-4" />Continue with GitHub</button>
-          </>)}
+          {session
+            ? <UserMenu name={gh?.user_name ?? "Signed in"} avatar={gh?.avatar_url} privateOn={repoScope} onEnablePrivate={() => signIn("repo read:user")} onSignOut={() => { sb?.auth.signOut(); setProviderToken(null); }} />
+            : <button className="btn flex items-center gap-1 !px-3 !py-1.5 text-sm" title="Signs you in, or creates your account the first time" onClick={() => signIn()}><LogIn className="h-4 w-4" />Continue with GitHub</button>}
         </div>
       </nav>
 
@@ -113,14 +110,9 @@ export default function App() {
           <span className="rounded-full border border-stone-300 bg-white px-3 py-1 text-xs text-slate-500">CodeSprint 2026 · Team Limitless Arise</span>
           <h1 className="mt-5 text-5xl font-bold tracking-tighter sm:text-6xl">Know before <span className="text-slate-400">you ship.</span></h1>
           <p className="mx-auto mt-4 max-w-xl text-lg text-slate-500">Evidence-backed repository audits, prioritised findings, grounded AI guidance, and a rescan that proves your fixes worked.</p>
-          <form className="mx-auto mt-7 flex max-w-2xl flex-wrap gap-2 sm:flex-nowrap rounded-2xl border border-stone-200 bg-white p-2 shadow-sm" onSubmit={(e) => { e.preventDefault(); run(url); }}>
-            {repos.length > 0 && (
-              <select aria-label="Choose one of your repositories" value="" onChange={(e) => e.target.value && setUrl("https://github.com/" + e.target.value)} className="w-full rounded-xl border border-stone-200 bg-stone-50 px-2 py-2 text-sm outline-none sm:w-44">
-                <option value="">Your repos ({repos.length})</option>
-                {repos.map((r) => <option key={r.full_name} value={r.full_name}>{r.full_name}{r.private ? " (private)" : ""}</option>)}
-              </select>)}
-            <input className="min-w-0 flex-1 bg-transparent px-3 outline-none" placeholder="https://github.com/owner/repo" aria-label="GitHub repository URL" value={url} onChange={(e) => setUrl(e.target.value)} />
-            <button className="btn flex items-center gap-1" disabled={busy}>{busy ? "Scanning…" : <>Run preflight <ArrowRight className="h-4 w-4" /></>}</button>
+          <form className="mx-auto mt-7 flex max-w-2xl items-center gap-2 rounded-2xl border border-stone-200 bg-white p-2 shadow-sm transition focus-within:border-slate-400 focus-within:shadow-md" onSubmit={(e) => { e.preventDefault(); run(url); }}>
+            <RepoPicker value={url} onChange={setUrl} repos={repos} privateOn={repoScope} signedIn={!!session} onEnablePrivate={() => signIn("repo read:user")} />
+            <button className="btn flex flex-none items-center gap-1" disabled={busy}>{busy ? "Scanning…" : <>Run preflight <ArrowRight className="h-4 w-4" /></>}</button>
           </form>
           <p className="mt-3 text-xs text-slate-500">Try: {EXAMPLES.map((x) => <button key={x} disabled={busy} onClick={() => example(x)} className="mx-1 underline decoration-stone-300 underline-offset-2 hover:text-slate-900">{x}</button>)}</p>
           {!session && <p className="mt-2 text-xs text-slate-500">Use Continue with GitHub (top right) to save your history and scan private repos.</p>}

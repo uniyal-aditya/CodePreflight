@@ -30,14 +30,17 @@ export const setProviderToken = (t: string | null) => { ghToken = t; };
 export const hasToken = () => !!ghToken;
 export const getToken = () => ghToken;
 export type Repo = { full_name: string; private: boolean };
-/** The signed-in user's repositories. With a GitHub token (after sign-in) this includes private repos when `repo` access was granted; otherwise it lists their public repos. */
-export async function listRepos(login?: string): Promise<Repo[]> {
+/** The signed-in user's repositories. With a GitHub token this includes private repos when `repo` access was granted; otherwise it lists their public repos.
+ *  repoScope: true/false when GitHub reports the token's scopes, null when unknown. */
+export async function listRepos(login?: string): Promise<{ repos: Repo[]; repoScope: boolean | null }> {
   const t = ghToken;
   const u = t ? "https://api.github.com/user/repos?per_page=100&sort=pushed&affiliation=owner,collaborator,organization_member" : login ? `https://api.github.com/users/${encodeURIComponent(login)}/repos?per_page=100&sort=pushed` : null;
-  if (!u) return [];
+  if (!u) return { repos: [], repoScope: null };
   const r = await fetch(u, { headers: { Accept: "application/vnd.github+json", ...(t ? { Authorization: "Bearer " + t } : {}) } });
-  if (!r.ok) return [];
-  return (await r.json()).map((x: any) => ({ full_name: x.full_name, private: !!x.private }));
+  if (!r.ok) return { repos: [], repoScope: null };
+  const scopes = r.headers.get("x-oauth-scopes");
+  const repos = (await r.json()).map((x: any) => ({ full_name: x.full_name, private: !!x.private }));
+  return { repos, repoScope: t && scopes !== null ? scopes.split(",").map((x) => x.trim()).includes("repo") : null };
 }
 async function headers() {
   const h: Record<string, string> = { "Content-Type": "application/json" };
