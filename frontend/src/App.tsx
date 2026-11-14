@@ -136,7 +136,6 @@ export default function App() {
             {cmp && <div className="card flex flex-wrap gap-8 text-center">{([["Previous", prev!.length], ["Now", F.length], ["Resolved", cmp.resolved], ["Still open", cmp.still], ["New", cmp.fresh]] as [string, number][]).map(([l, n]) => <div key={l}><b className="block text-2xl">{n}</b><span className="text-xs text-slate-500">{l}</span></div>)}</div>}
             <span id="findings-anchor" /><H2>Findings</H2>
             <FindingsView F={F} acc={acc} aiMap={aiMap} sel={sel} setSel={setSel} flt={flt} setFlt={setFlt} onExplain={explain} onAccept={accept} clean={rep.mode === "lite"} />
-            <H2>Ask about this repo</H2><Chat key={rep.id} rep={rep} onSelect={(id) => { setSel(id); setFlt("all"); document.getElementById("findings-anchor")?.scrollIntoView({ behavior: "smooth" }); }} />
             <H2>Next steps</H2><NextSteps open={s.open} />
             <H2>Scan coverage</H2><Coverage cov={rep.coverage} />
           </section>
@@ -145,6 +144,7 @@ export default function App() {
         <History items={items} onOpen={open} onCompare={compare} />
         <Suspense fallback={<p className="mt-14 text-center text-sm text-slate-400">Loading…</p>}><Info /></Suspense>
       </main>
+      {rep && <Chat key={rep.id} rep={rep} onSelect={(id) => { setSel(id); setFlt("all"); document.getElementById("findings-anchor")?.scrollIntoView({ behavior: "smooth" }); }} />}
       <footer className="pb-10 text-center text-xs text-slate-400">Findings need human review. A clean report is not a guarantee of safety.<br />Built by Limitless Arise · Aditya Uniyal · Aditya Singh · Prince Bisht · Akshat Arya · Harshit Gupta</footer>
     </div>
   );
