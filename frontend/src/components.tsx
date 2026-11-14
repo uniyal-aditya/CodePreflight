@@ -100,10 +100,10 @@ export function History({ items, onOpen, onCompare }: { items: HItem[]; onOpen: 
   const [picked, setPicked] = useState<string[]>([]), [msg, setMsg] = useState("");
   return (
     <section id="history" className="mt-10"><H2>Scan history</H2><p className="mb-3 text-sm text-slate-500">Open a previous audit, or tick two to compare them.</p>
-      <div className="card overflow-x-auto"><table className="w-full text-left text-sm"><thead className="text-slate-500"><tr><th /><th>Repository</th><th>Commit</th><th>Score</th><th>Risk</th><th>Date</th><th /></tr></thead><tbody>
+      <div className="card overflow-x-auto"><table className="w-full text-left text-sm"><thead className="text-slate-500"><tr><th /><th>Repository</th><th>Commit</th><th>Score</th><th>Risk</th><th>Status</th><th>Date</th><th /></tr></thead><tbody>
         {items.map((h) => <tr key={h.id} className="border-t border-stone-100"><td><input type="checkbox" aria-label="select" checked={picked.includes(h.id)} onChange={(e) => setPicked((p) => (e.target.checked ? [...p, h.id] : p.filter((x) => x !== h.id)))} /></td>
-          <td className="py-2">{h.url.replace("https://github.com/", "")}</td><td><code>{h.commit.slice(0, 7)}</code></td><td>{h.score ?? "–"}</td><td>{h.risk || "–"}</td><td>{new Date(h.at).toLocaleString()}</td><td><button className="ghost" onClick={() => onOpen(h.id)}>Open</button></td></tr>)}
-        {!items.length && <tr><td colSpan={7} className="py-3 text-slate-500">No audits yet. Run one above.</td></tr>}</tbody></table></div>
+          <td className="py-2">{h.url.replace("https://github.com/", "")}</td><td><code>{h.commit.slice(0, 7)}</code></td><td>{h.score ?? "–"}</td><td>{h.risk || "–"}</td><td className={h.status === "failed" ? "text-red-700" : h.status === "completed" ? "text-slate-500" : "text-amber-700"}>{h.status}</td><td>{new Date(h.at).toLocaleString()}</td><td><button className="ghost disabled:opacity-40" disabled={h.status !== "completed"} onClick={() => onOpen(h.id)}>Open</button></td></tr>)}
+        {!items.length && <tr><td colSpan={8} className="py-3 text-slate-500">No audits yet. Run one above.</td></tr>}</tbody></table></div>
       <button className="ghost mt-3" onClick={async () => { if (picked.length !== 2) return setMsg("Tick exactly two audits."); const [n, o] = items.filter((h) => picked.includes(h.id)).map((h) => h.id); try { setMsg("Newer vs older: " + (await onCompare(n, o))); } catch (e) { setMsg((e as Error).message); } }}>Compare selected</button>
       <span className="ml-3 text-sm text-slate-500">{msg}</span>
     </section>

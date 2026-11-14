@@ -32,11 +32,15 @@ export function rules(paths: string[]): [Finding[], Record<string, string>] {
 
 type Dep = [string, string, string, string];
 async function deps(o: string, n: string, sha: string, blobs: any[]): Promise<Dep[]> {
-  const out: Dep[] = [], get = async (f: string) => { const b = blobs.find((x) => x.path === f); if (!b || b.size > 3_000_000) return null; const t = getToken(), r = t ? await fetch(`${GH}/repos/${o}/${n}/contents/${f}?ref=${sha}`, { headers: { Accept: "application/vnd.github.raw+json", Authorization: "Bearer " + t } }) : await fetch(`https://raw.githubusercontent.com/${o}/${n}/${sha}/${f}`); if (!r.ok) throw new Error("raw"); return r.text(); };
-  const req = await get("requirements.txt");
-  for (const l of (req || "").split("\n")) { const m = l.match(/^\s*([A-Za-z0-9_.-]+)==([A-Za-z0-9_.+-]+)/); if (m) out.push(["PyPI", m[1], m[2], "requirements.txt"]); }
-  const lock = await get("package-lock.json");
-  if (lock) for (const [k, v] of Object.entries<any>(JSON.parse(lock).packages || {})) if (k.startsWith("node_modules/") && v.version) out.push(["npm", k.split("node_modules/").pop()!, v.version, "package-lock.json"]);
+  const out: Dep[] = [], t = getToken();
+  const get = async (f: string) => { const r = t ? await fetch(`${GH}/repos/${o}/${n}/contents/${f}?ref=${sha}`, { headers: { Accept: "application/vnd.github.raw+json", Authorization: "Bearer " + t } }) : await fetch(`https://raw.githubusercontent.com/${o}/${n}/${sha}/${f}`); if (!r.ok) throw new Error("raw"); return r.text(); };
+  // monorepos keep manifests in subfolders: take up to 6 of them, never from node_modules
+  const files = blobs.filter((b) => /(^|\/)(requirements\.txt|package-lock\.json)$/.test(b.path) && !b.path.includes("node_modules/") && b.size <= 3_000_000).slice(0, 6);
+  for (const b of files) {
+    const text = await get(b.path);
+    if (b.path.endsWith("requirements.txt")) { for (const l of text.split("\n")) { const m = l.match(/^\s*([A-Za-z0-9_.-]+)==([A-Za-z0-9_.+-]+)/); if (m) out.push(["PyPI", m[1], m[2], b.path]); } }
+    else for (const [k, v] of Object.entries<any>(JSON.parse(text).packages || {})) if (k.startsWith("node_modules/") && v.version) out.push(["npm", k.split("node_modules/").pop()!, v.version, b.path]);
+  }
   return out.slice(0, 500);
 }
 async function osv(ds: Dep[]): Promise<Finding[]> {

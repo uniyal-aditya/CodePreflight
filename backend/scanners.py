@@ -19,18 +19,27 @@ def trivy(path):
             out.append(finding(m["ID"], "Security", sv(m["Severity"]), m["Title"], res["Target"], m.get("Message", ""), m.get("Resolution", ""), "trivy", m["ID"]))
     return out, "ran"
 
+SKIP_DIRS = {".git", "node_modules", "venv", ".venv", "dist", "build", "__pycache__"}
+
 def _deps(path):
+    """Pinned dependencies from requirements.txt and package-lock.json files anywhere in the repo (monorepos keep them in subfolders)."""
+    out = []
     def safe(p): return os.path.isfile(p) and not os.path.islink(p) and os.path.getsize(p) < 5_000_000  # no symlink escapes
-    out, req, lock = [], os.path.join(path, "requirements.txt"), os.path.join(path, "package-lock.json")
-    if safe(req):
-        for line in open(req, errors="ignore"):
-            m = re.match(r"^\s*([A-Za-z0-9_.-]+)==([A-Za-z0-9_.+-]+)", line)
-            if m: out.append(("PyPI", m[1], m[2], "requirements.txt"))
-    if safe(lock):
-        try: pk = json.load(open(lock)).get("packages", {})
-        except ValueError: pk = {}
-        for k, v in list(pk.items())[:2000]:
-            if k.startswith("node_modules/") and v.get("version"): out.append(("npm", k.split("node_modules/")[-1], v["version"], "package-lock.json"))
+    for root, dirs, files in os.walk(path):
+        dirs[:] = [d for d in dirs if d not in SKIP_DIRS]
+        rel_root = os.path.relpath(root, path)
+        if rel_root != "." and rel_root.count(os.sep) >= 4: dirs[:] = []  # depth limit
+        for name in files:
+            full, rel = os.path.join(root, name), (name if rel_root == "." else f"{rel_root}/{name}")
+            if name == "requirements.txt" and safe(full):
+                for line in open(full, errors="ignore"):
+                    m = re.match(r"^\s*([A-Za-z0-9_.-]+)==([A-Za-z0-9_.+-]+)", line)
+                    if m: out.append(("PyPI", m[1], m[2], rel))
+            elif name == "package-lock.json" and safe(full):
+                try: pk = json.load(open(full)).get("packages", {})
+                except ValueError: pk = {}
+                for k, v in list(pk.items())[:2000]:
+                    if k.startswith("node_modules/") and v.get("version"): out.append(("npm", k.split("node_modules/")[-1], v["version"], rel))
     return out[:1000]
 
 def osv(path):
@@ -76,6 +85,8 @@ def scorecard(owner, name):  # public repos only; uses Scorecard's public REST A
 HIST = {"aws-access-key-id": r"\bAKIA[0-9A-Z]{16}\b", "github-token": r"\bgh[pousr]_[A-Za-z0-9]{36,}\b", "private-key": r"-----BEGIN (?:RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----",
         "slack-token": r"\bxox[baprs]-[A-Za-z0-9-]{10,}\b", "google-api-key": r"\bAIza[0-9A-Za-z_\-]{35}\b"}
 
+FIXTURE = re.compile(r"(^|/)(tests?|__tests__|fixtures?|mocks?|examples?|samples?|docs?)(/|$)|(_test|\.test|\.spec)\.")
+
 def history(path, max_commits=100, max_bytes=20_000_000):
     """Secrets that were committed in the last N commits, even if they were later removed. Pattern based, so confidence is medium."""
     from core import mask
@@ -94,6 +105,10 @@ def history(path, max_commits=100, max_bytes=20_000_000):
             m = re.search(rx, line)
             if m and (rid, file, m.group()) not in seen and len(out) < 50:
                 seen.add((rid, file, m.group()))
-                out.append(finding(rid, "Security", "critical", f"Secret in Git history: {rid}", file, f"commit {cur}: {mask(m.group())}",
-                                   "Revoke and rotate the credential. Deleting it from current files is not enough, it stays in history.", "git-history", rid + "-history", conf="medium"))
+                val = m.group()
+                if "EXAMPLE" in val.upper(): continue  # documentation keys such as AWS's AKIA...EXAMPLE are public and harmless
+                fixture = bool(FIXTURE.search(file.lower()))
+                out.append(finding(rid, "Security", "low" if fixture else "critical", f"Secret in Git history: {rid}" + (" (test or docs file)" if fixture else ""), file, f"commit {cur}: {mask(val)}",
+                                   "Revoke and rotate the credential. Deleting it from current files is not enough, it stays in history." + (" If this is a fake value used in a test, no action is needed." if fixture else ""),
+                                   "git-history", rid + "-history", conf="low" if fixture else "medium"))
     return out, "ran"

@@ -6,6 +6,7 @@ import { API, sb, api, setProviderToken, listRepos, fullAudit, reportFromAudit, 
 import { liteAudit } from "./lite";
 import { exportReport } from "./exporters";
 import { RepoPicker, UserMenu } from "./RepoPicker";
+import { Chat } from "./Chat";
 import { FindingsView, H2, History, HItem, NextSteps, Coverage, Pipeline, Summary } from "./components";
 
 const Info = lazy(() => import("./info").then((m) => ({ default: m.Info }))); // loaded after first paint
@@ -133,8 +134,9 @@ export default function App() {
               {(["json", "sarif", "md", "pdf"] as const).map((f) => <button key={f} className="ghost flex items-center gap-1" onClick={() => exportReport(rep, acc, f)}><Download className="h-3.5 w-3.5" />{f.toUpperCase()}</button>)}
             </div>
             {cmp && <div className="card flex flex-wrap gap-8 text-center">{([["Previous", prev!.length], ["Now", F.length], ["Resolved", cmp.resolved], ["Still open", cmp.still], ["New", cmp.fresh]] as [string, number][]).map(([l, n]) => <div key={l}><b className="block text-2xl">{n}</b><span className="text-xs text-slate-500">{l}</span></div>)}</div>}
-            <H2>Findings</H2>
+            <span id="findings-anchor" /><H2>Findings</H2>
             <FindingsView F={F} acc={acc} aiMap={aiMap} sel={sel} setSel={setSel} flt={flt} setFlt={setFlt} onExplain={explain} onAccept={accept} clean={rep.mode === "lite"} />
+            <H2>Ask about this repo</H2><Chat key={rep.id} rep={rep} onSelect={(id) => { setSel(id); setFlt("all"); document.getElementById("findings-anchor")?.scrollIntoView({ behavior: "smooth" }); }} />
             <H2>Next steps</H2><NextSteps open={s.open} />
             <H2>Scan coverage</H2><Coverage cov={rep.coverage} />
           </section>

@@ -152,3 +152,15 @@ def accept(finding_id: str, body: dict, authorization: str | None = Header(None)
     db.table("findings").update({"status": "accepted"}).eq("id", finding_id).execute()
     db.table("finding_status_history").insert({"finding_id": finding_id, "status": "accepted", "reason": body["reason"], "changed_by": uid}).execute()
     return {"ok": True}
+
+class ChatIn(BaseModel):
+    messages: list[dict]
+
+@app.post("/api/v1/audits/{audit_id}/chat")
+def ask(audit_id: str, body: ChatIn, request: Request, authorization: str | None = Header(None)):
+    """Questions about one finished scan. Only the scan's own (masked) results are sent to the AI."""
+    limit(request.client.host + ":chat", n=int(os.getenv("CHAT_LIMIT_PER_HOUR", "60")))
+    a = own(audit_id, current_user(authorization))
+    if a.get("status") != "completed": raise HTTPException(409, "The scan has not completed yet")
+    try: return ai.chat(a, db.table("findings").select("*").eq("audit_id", audit_id).execute().data, body.messages)
+    except ValueError as e: raise HTTPException(400, str(e))
