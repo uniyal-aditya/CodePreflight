@@ -1,9 +1,22 @@
 /* Minimal dependency-free PDF writer: plain text, Courier, automatic page breaks. */
+/** Word wrap that keeps the line indent and only splits a word when it is longer than a whole line. */
+function wrap(raw: string, cols: number): string[] {
+  if (!raw.trim()) return [""];
+  const ind = (raw.match(/^\s*/) as RegExpMatchArray)[0], room = Math.max(10, cols - ind.length), out: string[] = [];
+  let cur = "";
+  for (let w of raw.trim().split(/\s+/)) {
+    while (w.length > room) { if (cur) { out.push(ind + cur); cur = ""; } out.push(ind + w.slice(0, room)); w = w.slice(room); }
+    if (!cur) cur = w; else if ((cur + " " + w).length <= room) cur += " " + w; else { out.push(ind + cur); cur = w; }
+  }
+  if (cur) out.push(ind + cur);
+  return out;
+}
+
 export function textToPdf(text: string): Blob {
   const W = 612, H = 792, M = 50, FS = 10, LH = 13, cols = Math.floor((W - 2 * M) / (FS * 0.6));
   const esc = (s: string) => s.replace(/[^\x00-\xff]/g, "?").replace(/\\/g, "\\\\").replace(/\(/g, "\\(").replace(/\)/g, "\\)");
   const lines: string[] = [];
-  for (const raw of text.split("\n")) { if (!raw) { lines.push(""); continue; } for (let i = 0; i < raw.length; i += cols) lines.push(raw.slice(i, i + cols)); }
+  for (const raw of text.split("\n")) lines.push(...wrap(raw, cols));
   const per = Math.floor((H - 2 * M) / LH), pages: string[][] = [];
   for (let i = 0; i < lines.length; i += per) pages.push(lines.slice(i, i + per));
   if (!pages.length) pages.push([]);

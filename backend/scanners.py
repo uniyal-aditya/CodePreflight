@@ -1,6 +1,6 @@
 """Scanner adapters. Every adapter returns (findings, status). Static inspection only: nothing from the repo is executed."""
 import os, re, json, subprocess
-from core import finding, DEDUCT, ORDER
+from core import finding, DEDUCT, ORDER, fix_advice
 
 def trivy(path):
     try:
@@ -11,7 +11,7 @@ def trivy(path):
     out, sv = [], lambda s: s.lower() if s.lower() in DEDUCT else "low"
     for res in data.get("Results", []):
         for v in res.get("Vulnerabilities") or []:
-            out.append(finding(v["VulnerabilityID"], "Dependencies", sv(v["Severity"]), f'{v["PkgName"]} {v["InstalledVersion"]}', res["Target"], v.get("Title", ""), f'Upgrade to {v.get("FixedVersion") or "a patched version"}.', "trivy", v["VulnerabilityID"]))
+            out.append(finding(v["VulnerabilityID"], "Dependencies", sv(v["Severity"]), f'{v["PkgName"]} {v["InstalledVersion"]}', res["Target"], v.get("Title", ""), fix_advice(v["InstalledVersion"], v.get("FixedVersion", "")), "trivy", v["VulnerabilityID"]))
         for s in res.get("Secrets") or []:
             from core import mask
             out.append(finding(s["RuleID"], "Security", "critical", s["Title"], res["Target"], mask(s.get("Match", "secret")), "Rotate the credential, move it to a secret store, purge Git history.", "trivy", s["RuleID"], line=s.get("StartLine")))
@@ -45,12 +45,14 @@ def osv(path):
             res = httpx.post("https://api.osv.dev/v1/querybatch", json={"queries": [{"package": {"name": n, "ecosystem": e}, "version": v} for e, n, v, _ in chunk]}, timeout=30).json()["results"]
             for (e, n, v, f), r in zip(chunk, res):
                 for vuln in (r.get("vulns") or [])[:3]:
-                    sev, summ = "medium", ""
+                    sev, summ, rec = "medium", "", "Upgrade to a patched version listed in the advisory."
                     if detail < 15:
                         detail += 1
                         d = httpx.get(f"https://api.osv.dev/v1/vulns/{vuln['id']}", timeout=15).json()
                         sev = SEV.get((d.get("database_specific") or {}).get("severity", "").upper(), "medium"); summ = d.get("summary", "")[:120]
-                    out.append(finding(vuln["id"], "Dependencies", sev, f"{n} {v}", f, f"{vuln['id']}: {summ}", "Upgrade to a patched version listed in the advisory.", "osv", vuln["id"], conf="high" if detail <= 15 else "medium"))
+                        fixed = [e["fixed"] for a in d.get("affected", []) if (a.get("package") or {}).get("name") == n for r_ in a.get("ranges", []) for e in r_.get("events", []) if "fixed" in e]
+                        if fixed: rec = fix_advice(v, ",".join(fixed))
+                    out.append(finding(vuln["id"], "Dependencies", sev, f"{n} {v}", f, f"{vuln['id']}: {summ}", rec, "osv", vuln["id"], conf="high" if detail <= 15 else "medium"))
     except (httpx.HTTPError, KeyError, ValueError): return out, "failed"
     return out, "ran"
 

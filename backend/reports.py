@@ -1,5 +1,5 @@
 import json, re
-from core import ORDER
+from core import ORDER, advisory_url
 from pdf import text_to_pdf
 
 LEVEL = {"critical": "error", "high": "error", "medium": "warning", "low": "note", "info": "note"}
@@ -18,10 +18,10 @@ def to_sarif(audit, findings):  # SARIF 2.1.0, accepted by GitHub code scanning
 def to_markdown(audit, findings):
     fs = sorted(findings, key=lambda f: ORDER.index(f["severity"]))
     L = [f"# CodePreflight report", "", f"- Commit: `{audit['commit_sha']}`", f"- Readiness score: {audit.get('score')}/100", f"- Security risk status: {audit.get('risk')}",
-         f"- Scan coverage: {audit.get('coverage_pct', '?')}% (unknown checks are not counted as passing)", "", "## Findings (most severe first)", ""]
+         f"- Scan coverage: {audit.get('coverage_pct', '?')}% (unknown checks are not counted as passing)", "- Findings: " + (", ".join(f"{sum(f['severity'] == s for f in findings)} {s}" for s in ORDER if any(f['severity'] == s for f in findings)) or "none reported"), "", "## Findings (most severe first)", ""]
     for i, f in enumerate(fs, 1):
-        L += [f"{i}. **[{f['severity'].upper()}] {f['title']}** ({f['source']}, `{f['file_path']}`)", f"   - Evidence: {f['evidence']}", f"   - Fix: {f['recommendation']}"]
-    L += ["", "## Scan coverage", ""] + [f"- {k}: {v}" for k, v in (audit.get("coverage") or {}).items()]
+        L += [f"{i}. **[{f['severity'].upper()}] {f['title']}** ({f['source']}, `{f['file_path']}`)", f"   - Evidence: {f['evidence']}", f"   - Fix: {f['recommendation']}"] + ([f"   - Advisory: {advisory_url(f['rule_id'])}"] if advisory_url(f["rule_id"]) else [])
+    L += ["", "## Scan coverage", ""] + [f"- {k}: {v}" for k, v in (audit.get("coverage") or {}).items()] + ["- Not covered: Git history beyond the last 100 commits, binary and container artefacts, runtime behaviour"]
     return "\n".join(L + ["", "_Automated findings need human review. This is not a guarantee of safety._"])
 
 def to_json(audit, findings): return json.dumps({"schema": "codepreflight/v1", "audit": audit, "findings": findings}, indent=2, default=str)

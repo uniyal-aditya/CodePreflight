@@ -93,3 +93,13 @@ def test_schema_has_every_findings_column_the_scanners_write():
     cols = set(re.findall(r"(?:^|[,(\s])(\w+)\s+(?:text|int|uuid|jsonb|boolean|timestamptz)\b", body)) | set(re.findall(r"alter table findings add column if not exists (\w+)", sql))
     f = core.finding("X", "Security", "high", "t", "a.py", "e", "r", "trivy", "X"); f.update(audit_id="x", status="open")
     assert set(f) <= cols, f"findings table is missing columns: {set(f) - cols}"
+
+def test_fix_advice_prefers_same_major_and_warns_on_major_bumps():
+    assert core.fix_advice("6.30.6", "7.18.0, 6.31.0").startswith("Upgrade to 6.31.0")
+    a = core.fix_advice("6.30.6", "7.18.0"); assert "7.18.0" in a and "major version" in a
+    assert "No patched version" in core.fix_advice("1.0.0", "")
+
+def test_report_links_advisories_and_summarises():
+    f = core.finding("GHSA-mrhx-c7xc-m3w5", "Dependencies", "high", "zod 3.25.76", "package-lock.json", "e", "r", "osv", "GHSA-mrhx-c7xc-m3w5")
+    md = reports.to_markdown({"commit_sha": "abc", "coverage": {"trivy": "ran"}}, [f])
+    assert "https://github.com/advisories/GHSA-mrhx-c7xc-m3w5" in md and "1 high" in md and "Not covered:" in md

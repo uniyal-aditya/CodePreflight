@@ -53,3 +53,20 @@ def score(fs):
 def coverage_pct(cov):
     v = [x for x in cov.values() if isinstance(x, str)]
     return round(100 * sum(x in KNOWN for x in v) / len(v)) if v else 0
+
+def _major(v):
+    m = re.match(r"v?(\d+)", (v or "").strip())
+    return int(m.group(1)) if m else None
+
+def fix_advice(installed, fixed):
+    """Turn a list of fixed versions into one clear recommendation, preferring a fix inside the same major version."""
+    opts = [x.strip() for x in re.split(r"[,;]", fixed or "") if x.strip()]
+    if not opts: return "No patched version is listed yet. Check the advisory, or replace the package."
+    same = [x for x in opts if _major(x) == _major(installed)]
+    if same: return f"Upgrade to {same[0]} (same major version, low risk)."
+    return f"Upgrade to {opts[0]} (a major version change from {installed}: read the changelog for breaking changes)."
+
+def advisory_url(rule_id):
+    if re.match(r"^CVE-\d{4}-\d+$", rule_id or ""): return f"https://nvd.nist.gov/vuln/detail/{rule_id}"
+    if re.match(r"^GHSA-[\w-]+$", rule_id or ""): return f"https://github.com/advisories/{rule_id}"
+    return ""
