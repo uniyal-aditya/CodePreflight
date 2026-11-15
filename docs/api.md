@@ -8,6 +8,7 @@
 | GET | /audits/{id}/report?format=json\|sarif\|md\|pdf | Export |
 | GET | /history | The signed-in user's audits |
 | POST | /ai/explain | `{finding_ids}` (max 5), grounded explanations |
+| POST | /audits/{id}/chat | `{messages}` (last 6 used): questions about one finished scan. The AI sees only that scan's masked results. Limit `CHAT_LIMIT_PER_HOUR` |
 | POST | /findings/{id}/accept | Accept a risk `{reason}` (logged) |
 
 Headers: `Authorization: Bearer <supabase access token>`, optional `X-GitHub-Token` (private repos, used per request, never stored).

@@ -14,6 +14,21 @@ export type Report = { id: string; url: string; commit: string; at: string; mode
 export const hash = (s: string) => { let h = 5381; for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0; return (h >>> 0).toString(16).padStart(8, "0").slice(0, 6).toUpperCase(); };
 export const pctOf = (c: Record<string, string>) => { const v = Object.values(c); return v.length ? Math.round((100 * v.filter((x) => ["pass", "fail", "ran"].includes(x)).length) / v.length) : 0; };
 export const validUrl = (u: string) => /^https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/?$/.test(u.trim());
+/** Turns technical server errors into sentences a person can act on. Returns null when it has nothing better to say. */
+export function friendlyError(msg: string): string | null {
+  if (/PGRST|schema cache|column .* of/i.test(msg)) return "The database is missing a recent update. The site owner needs to run the latest backend/schema.sql in Supabase.";
+  if (/Invalid API key|bad_jwt|Invalid JWT/i.test(msg)) return "The server could not sign in to its database. The site owner needs to check the Supabase key.";
+  if (/rate limit|Too many/i.test(msg)) return "Too many checks in a short time. Please wait a little and try again.";
+  return null;
+}
+const major = (v: string) => (v.trim().match(/^v?(\d+)/) || [])[1];
+/** Same advice as the backend: prefer a fix inside the current major version, and warn when the fix is a major upgrade. */
+export function fixAdvice(installed: string, fixed: string[]): string {
+  const opts = fixed.map((x) => x.trim()).filter(Boolean);
+  if (!opts.length) return "Upgrade to a patched version listed in the advisory.";
+  const same = opts.find((x) => major(x) === major(installed));
+  return same ? `Upgrade to ${same} (same major version, low risk).` : `Upgrade to ${opts[0]} (a major version change from ${installed}: read the changelog for breaking changes).`;
+}
 export const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const WHY: Record<Sev, string> = { critical: "Exploitable immediately and can expose accounts or data.", high: "Serious weakness that should be fixed before release.", medium: "Meaningful risk that should be fixed soon.", low: "Lower impact; improves quality and trust.", info: "For awareness only." };
 export const explainLocal = (f: Finding) => `${f.t} was reported by ${f.src} (rule ${f.rule}) in ${f.file}${f.line ? ":" + f.line : ""}. ${WHY[f.sev]} ${f.fix}`;
@@ -51,7 +66,7 @@ async function headers() {
 export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   const r = await fetch(API + path, { ...init, headers: await headers() });
   let j: any = null; try { j = await r.json(); } catch { /* non-JSON */ }
-  if (!r.ok) throw new Error(j?.detail || `Request failed (${r.status})`);
+  if (!r.ok) { const d = typeof j?.detail === "string" ? j.detail : j?.detail ? "That request was not valid." : ""; throw new Error(friendlyError(d) ?? (d || `Request failed (${r.status})`)); }
   return j as T;
 }
 const toFinding = (f: any): Finding => ({ id: "F-" + f.fingerprint.slice(0, 6).toUpperCase(), uid: f.id, cat: f.category, sev: f.severity, conf: f.confidence, t: f.title, file: f.file_path, line: f.line_number, ev: f.evidence, src: f.source, rule: f.rule_id, fix: f.recommendation, ai: f.ai ? `${f.ai.explanation} ${(f.ai.steps || []).join(" ")} ${f.ai.priority_reason || ""}` : "", st: f.status });
@@ -60,7 +75,7 @@ export async function fullAudit(url: string, stage: (n: number) => void): Promis
   const j = await api<{ audit_id: string }>("/api/v1/audits", { method: "POST", body: JSON.stringify({ repository_url: url }) });
   for (let n = 0; n < 200; n++) {
     await sleep(1500); const a = await api<any>(`/api/v1/audits/${j.audit_id}`); stage(Math.min(3, 1 + Math.floor(n / 2)));
-    if (a.status === "failed") throw new Error("Scan failed: " + (a.coverage?.error || "unknown error"));
+    if (a.status === "failed") { const e = a.coverage?.error || ""; throw new Error(friendlyError(e) ?? "Scan failed: " + (e || "unknown error")); }
     if (a.status === "completed") return reportFromAudit(a, url);
   }
   throw new Error("The scan timed out.");

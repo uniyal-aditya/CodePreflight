@@ -153,3 +153,40 @@ def test_chat_uses_provider_with_scan_context_and_falls_back_on_error():
         def chat(self, system, convo): raise RuntimeError("429")
     out = ai.chat({"commit_sha": "abc", "coverage": {}}, FS, [{"role": "user", "content": "What first?"}], Down())
     assert out["fallback"] is True and "zod 3.25.76" in out["answer"]
+
+def _fake_gitleaks(monkeypatch_target, leaks, code=0):
+    import json
+    def run(cmd, **kw):
+        assert cmd[:3] == ["gitleaks", "git", "--no-banner"] and "--exit-code" in cmd and any(c.startswith("--log-opts=-n ") for c in cmd)
+        open(cmd[cmd.index("--report-path") + 1], "w").write(json.dumps(leaks))
+        class R: returncode = code
+        return R()
+    monkeypatch_target.run = run
+
+def test_gitleaks_adapter_masks_secrets_and_filters_noise():
+    import scanners, subprocess as sp
+    real = scanners.subprocess
+    class Fake: TimeoutExpired = sp.TimeoutExpired
+    fake = Fake(); scanners.subprocess = fake
+    try:
+        _fake_gitleaks(fake, [
+            {"RuleID": "aws-access-token", "File": "cfg.py", "Secret": "AKIAQZ7R2WK5M3NP8XYT", "Commit": "abcdef1234", "StartLine": 7},
+            {"RuleID": "aws-access-token", "File": "cfg.py", "Secret": "AKIAQZ7R2WK5M3NP8XYT", "Commit": "abcdef1234", "StartLine": 7},      # repeat
+            {"RuleID": "aws-access-token", "File": "docs/a.md", "Secret": "AKIAIOSFODNN7EXAMPLE", "Commit": "1", "StartLine": 1},            # public doc key
+            {"RuleID": "github-pat", "File": "tests/test_x.py", "Secret": "ghp_" + "a" * 36, "Commit": "2", "StartLine": 3}])               # fixture
+        fs, st = scanners.gitleaks("/repo")
+    finally: scanners.subprocess = real
+    assert st == "ran" and len(fs) == 2
+    assert fs[0]["severity"] == "critical" and fs[0]["line_number"] == 7 and "AKIAQZ7R2WK5M3NP8XYT" not in fs[0]["evidence"] and fs[0]["source"] == "gitleaks"
+    assert fs[1]["severity"] == "low" and "ghp_" + "a" * 36 not in fs[1]["evidence"]
+
+def test_gitleaks_missing_binary_is_unknown_not_clean():
+    import scanners
+    real = scanners.subprocess
+    class Fake:
+        TimeoutExpired = real.TimeoutExpired
+        @staticmethod
+        def run(*a, **k): raise FileNotFoundError
+    scanners.subprocess = Fake
+    try: assert scanners.gitleaks("/repo") == ([], "unknown")
+    finally: scanners.subprocess = real

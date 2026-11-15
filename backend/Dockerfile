@@ -2,6 +2,8 @@ FROM python:3.12-slim
 RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates && rm -rf /var/lib/apt/lists/*
 # Trivy: secrets, vulnerable packages, misconfigurations. Pinned tag; check github.com/aquasecurity/trivy/releases for a newer one.
 COPY --from=docker.io/aquasec/trivy:0.72.0 /usr/local/bin/trivy /usr/local/bin/trivy
+# Gitleaks: secret detection in Git history. Binary path /usr/bin/gitleaks is unverified; pin a version tag instead of :latest once chosen.
+COPY --from=docker.io/zricethezav/gitleaks:latest /usr/bin/gitleaks /usr/local/bin/gitleaks
 # OpenSSF Scorecard runs through its public REST API (see scanners.py), so no binary or gcr.io image is needed here.
 ENV TRIVY_CACHE_DIR=/tmp/trivy HOME=/tmp
 WORKDIR /app

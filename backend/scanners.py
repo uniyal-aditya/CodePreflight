@@ -1,5 +1,5 @@
 """Scanner adapters. Every adapter returns (findings, status). Static inspection only: nothing from the repo is executed."""
-import os, re, json, subprocess
+import os, re, json, tempfile, subprocess
 from core import finding, DEDUCT, ORDER, fix_advice
 
 def trivy(path):
@@ -111,4 +111,31 @@ def history(path, max_commits=100, max_bytes=20_000_000):
                 out.append(finding(rid, "Security", "low" if fixture else "critical", f"Secret in Git history: {rid}" + (" (test or docs file)" if fixture else ""), file, f"commit {cur}: {mask(val)}",
                                    "Revoke and rotate the credential. Deleting it from current files is not enough, it stays in history." + (" If this is a fake value used in a test, no action is needed." if fixture else ""),
                                    "git-history", rid + "-history", conf="low" if fixture else "medium"))
+    return out, "ran"
+
+def gitleaks(path, max_commits=100):
+    """Secrets in the last N commits using Gitleaks (200+ rules). The report is written to a temp file, secrets are masked before they leave this function.
+    Returns ([], "unknown") when the binary is missing so the built-in pattern scan can take over."""
+    from core import mask
+    with tempfile.TemporaryDirectory() as tmp:
+        rp = os.path.join(tmp, "report.json")
+        try:
+            r = subprocess.run(["gitleaks", "git", "--no-banner", "--exit-code", "0", "--log-level", "error", "--report-format", "json", "--report-path", rp,
+                                f"--log-opts=-n {int(max_commits)}", path], capture_output=True, text=True, timeout=180)
+        except FileNotFoundError: return [], "unknown"
+        except subprocess.TimeoutExpired: return [], "failed"
+        if r.returncode != 0 or not os.path.exists(rp): return [], "failed"
+        try: leaks = json.load(open(rp)) or []
+        except ValueError: return [], "failed"
+    out, seen = [], set()
+    for x in leaks[:200]:
+        secret, file, rid = x.get("Secret", ""), x.get("File", ""), x.get("RuleID", "secret")
+        if "EXAMPLE" in secret.upper() or (rid, file, secret) in seen: continue  # public documentation keys, and repeats of the same value
+        seen.add((rid, file, secret))
+        fixture = bool(FIXTURE.search(file.lower()))
+        out.append(finding(rid, "Security", "low" if fixture else "critical", f"Secret in Git history: {rid}" + (" (test or docs file)" if fixture else ""), file,
+                           f"commit {str(x.get('Commit', ''))[:7]}, line {x.get('StartLine', '?')}: {mask(secret)}",
+                           "Revoke and rotate the credential. Deleting it from current files is not enough, it stays in history." + (" If this is a fake value used in a test, no action is needed." if fixture else ""),
+                           "gitleaks", rid + "-history", conf="low" if fixture else "medium", line=x.get("StartLine")))
+        if len(out) >= 50: break
     return out, "ran"

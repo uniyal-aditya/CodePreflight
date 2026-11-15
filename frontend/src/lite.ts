@@ -1,6 +1,6 @@
 /* Lite audit: runs in the browser against public GitHub, OSV and OpenSSF Scorecard APIs. Real data, no backend, no keys.
    It cannot run Trivy or the Git-history scan; those rows are reported as "needs backend", never as clean. */
-import { Finding, Report, Sev, SEV, hash, pctOf, getToken } from "./lib";
+import { Finding, Report, Sev, SEV, hash, pctOf, getToken, fixAdvice } from "./lib";
 
 const GH = "https://api.github.com";
 const mk = (rule: string, cat: string, sev: Sev, t: string, file: string, ev: string, fix: string, src: string, conf = "high"): Finding =>
@@ -49,9 +49,9 @@ async function osv(ds: Dep[]): Promise<Finding[]> {
   const res = (await r.json()).results as any[], out: Finding[] = [], MAP: Record<string, Sev> = { CRITICAL: "critical", HIGH: "high", MODERATE: "medium", MEDIUM: "medium", LOW: "low" };
   let detail = 0;
   for (let i = 0; i < ds.length; i++) for (const v of (res[i]?.vulns || []).slice(0, 3)) {
-    let sev: Sev = "medium", sum = "";
-    if (detail < 8) { detail++; try { const d = await (await fetch(`https://api.osv.dev/v1/vulns/${v.id}`)).json(); sev = MAP[(d.database_specific?.severity || "").toUpperCase()] || "medium"; sum = (d.summary || "").slice(0, 120); } catch { /* keep default */ } }
-    out.push(mk(v.id, "Dependencies", sev, `${ds[i][1]} ${ds[i][2]}`, ds[i][3], `${v.id}: ${sum}`, "Upgrade to a patched version listed in the advisory.", "osv", "medium"));
+    let sev: Sev = "medium", sum = "", rec = "Upgrade to a patched version listed in the advisory.";
+    if (detail < 8) { detail++; try { const d = await (await fetch(`https://api.osv.dev/v1/vulns/${v.id}`)).json(); sev = MAP[(d.database_specific?.severity || "").toUpperCase()] || "medium"; sum = (d.summary || "").slice(0, 120); const fixed = (d.affected || []).filter((a: any) => a.package?.name === ds[i][1]).flatMap((a: any) => (a.ranges || []).flatMap((r: any) => (r.events || []).filter((e: any) => e.fixed).map((e: any) => e.fixed))); if (fixed.length) rec = fixAdvice(ds[i][2], fixed); } catch { /* keep default */ } }
+    out.push(mk(v.id, "Dependencies", sev, `${ds[i][1]} ${ds[i][2]}`, ds[i][3], `${v.id}: ${sum}`, rec, "osv", "medium"));
   }
   return out;
 }

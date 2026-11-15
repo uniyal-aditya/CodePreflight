@@ -72,7 +72,8 @@ def run_audit(audit_id, owner, name, sha, tok, private):
             subprocess.run(["git", "-c", "core.hooksPath=/dev/null", "clone", "--depth", "100", f"https://github.com/{owner}/{name}.git", d], check=True, timeout=120, capture_output=True, env=env)
             t, cov["trivy"] = scanners.trivy(d)
             o, cov["osv"] = scanners.osv(d)
-            h, cov["secrets-history"] = scanners.history(d)  # last 100 commits
+            g, cov["gitleaks"] = scanners.gitleaks(d)  # last 100 commits
+            h, cov["secrets-history"] = (g, "ran") if cov["gitleaks"] == "ran" else scanners.history(d)  # built-in patterns if Gitleaks is not installed
         s, cov["scorecard"] = ([], "not covered (private repo)") if private else scanners.scorecard(owner, name)
         seen = {f["title"].split()[0] for f in t if f["category"] == "Dependencies"}  # avoid double-reporting the same package
         fs += t + [f for f in o if f["title"].split()[0] not in seen] + s + h

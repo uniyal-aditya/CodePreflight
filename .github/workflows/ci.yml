@@ -3,14 +3,23 @@ on: [push, pull_request]
 permissions:
   contents: read
 jobs:
-  test:
+  backend:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with: { python-version: "3.12" }
       - run: pip install pytest
+      - run: python -m py_compile backend/main.py backend/core.py backend/scanners.py backend/ai.py backend/reports.py backend/pdf.py
       - run: python -m pytest -q backend/tests
+  frontend:
+    runs-on: ubuntu-latest
+    defaults: { run: { working-directory: frontend } }
+    steps:
+      - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with: { node-version: "20" }
-      - run: cd frontend && npm install && npm run build
+      - run: npm install
+      - run: npm run build
+      - run: npm run typecheck   # shows type errors in the log without failing the build
+        continue-on-error: true
