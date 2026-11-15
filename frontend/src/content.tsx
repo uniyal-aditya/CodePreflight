@@ -45,7 +45,7 @@ export const CHECKERS: [string, string][] = [
 ];
 
 export const TEAM: [string, string, string][] = [
-  ["Aditya Uniyal", "Backend and integration", "AU"], ["Aditya Singh", "Scanning engine", "AS"], ["Prince Bisht", "Frontend", "PB"], ["Akshat Arya", "Testing and security", "AA"], ["Harshit Gupta", "Product and documentation", "HG"],
+  ["Aditya Uniyal", "Backend, integration & Deployment", "AU"], ["Aditya Singh", "Research & Development (R&D), Testing and Verification", "AS"], ["Prince Bisht", "Frontend", "PB"], ["Akshat Arya", "Testing and security", "AA"], ["Harshit Gupta", "Product and documentation", "HG"],
 ];
 
 export const JOURNEY: [string, string][] = [
