@@ -9,8 +9,8 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with: { python-version: "3.12" }
-      - run: pip install pytest
-      - run: python -m py_compile backend/main.py backend/core.py backend/scanners.py backend/ai.py backend/reports.py backend/pdf.py
+      - run: pip install pytest pyyaml
+      - run: python -m py_compile backend/main.py backend/core.py backend/scanners.py backend/ai.py backend/reports.py backend/pdf.py backend/integrity.py backend/prfetch.py backend/demo_fixtures.py
       - run: python -m pytest -q backend/tests
   frontend:
     runs-on: ubuntu-latest
@@ -19,7 +19,6 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with: { node-version: "20" }
-      - run: npm install
+      - run: npm ci
       - run: npm run build
-      - run: npm run typecheck   # shows type errors in the log without failing the build
-        continue-on-error: true
+      - run: npm run typecheck

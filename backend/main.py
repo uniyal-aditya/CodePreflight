@@ -1,15 +1,15 @@
 """CodePreflight API. Run: uvicorn main:app --reload
 Security: repo content is untrusted and never executed; scanners get argument lists (no shell);
 secrets are masked before storage/AI; GitHub tokens live in memory only; every audit is owner-checked."""
-import os, time, base64, logging, subprocess, tempfile, httpx
+import re, os, time, base64, logging, subprocess, tempfile, httpx
 from datetime import datetime, timezone
 from collections import defaultdict
 from fastapi import FastAPI, BackgroundTasks, HTTPException, Header, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from supabase import create_client
-import core, scanners, ai, reports
+import core, scanners, ai, reports, integrity, prfetch, demo_fixtures
 from pathlib import Path
 from dotenv import load_dotenv
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")  # the one shared .env at the project root
@@ -55,6 +55,15 @@ def limit(ip, n=int(os.getenv("RATE_LIMIT_PER_HOUR", "10")), per=3600):  # audit
     if len(HITS[ip]) >= n: raise HTTPException(429, "Too many audits. Try again later.")
     HITS[ip].append(now)
 
+def checkout_sha(url, sha, d, env):
+    """Fetch and check out exactly `sha` (hooks disabled); fail closed if HEAD differs from it."""
+    if not re.fullmatch(r"[0-9a-f]{40}", sha or ""): raise ValueError("Invalid commit SHA")
+    g = ["git", "-c", "core.hooksPath=/dev/null", "-C", d]
+    for cmd in (["init", "-q"], ["remote", "add", "origin", url], ["fetch", "-q", "--depth", "100", "origin", sha], ["checkout", "-q", "--detach", "FETCH_HEAD"]):
+        subprocess.run(g + cmd, check=True, timeout=120, capture_output=True, env=env)
+    head = subprocess.run(g + ["rev-parse", "HEAD"], check=True, timeout=20, capture_output=True, text=True, env=env).stdout.strip()
+    if head != sha: raise ValueError("Checked-out commit does not match the audited commit")
+
 def run_audit(audit_id, owner, name, sha, tok, private):
     cov = {}
     try:
@@ -69,7 +78,7 @@ def run_audit(audit_id, owner, name, sha, tok, private):
             b = base64.b64encode(f"x-access-token:{tok}".encode()).decode()
             env.update(GIT_CONFIG_COUNT="1", GIT_CONFIG_KEY_0="http.https://github.com/.extraheader", GIT_CONFIG_VALUE_0=f"AUTHORIZATION: basic {b}")
         with tempfile.TemporaryDirectory() as d:
-            subprocess.run(["git", "-c", "core.hooksPath=/dev/null", "clone", "--depth", "100", f"https://github.com/{owner}/{name}.git", d], check=True, timeout=120, capture_output=True, env=env)
+            checkout_sha(f"https://github.com/{owner}/{name}.git", sha, d, env)  # scan exactly the recorded commit
             t, cov["trivy"] = scanners.trivy(d)
             o, cov["osv"] = scanners.osv(d)
             g, cov["gitleaks"] = scanners.gitleaks(d)  # last 100 commits
@@ -165,3 +174,36 @@ def ask(audit_id: str, body: ChatIn, request: Request, authorization: str | None
     if a.get("status") != "completed": raise HTTPException(409, "The scan has not completed yet")
     try: return ai.chat(a, db.table("findings").select("*").eq("audit_id", audit_id).execute().data, body.messages)
     except ValueError as e: raise HTTPException(400, str(e))
+
+
+# ---- PR change integrity (v2, stateless for now: results are returned, not yet stored) ----
+class PRIn(BaseModel):
+    pr_url: str = Field(max_length=300)
+    task: str | None = Field(None, max_length=500)  # shown in the report; never fed to a model or used as policy
+    allowed_paths: list[str] = Field(default_factory=list, max_length=50)
+    protected_paths: list[str] = Field(default_factory=list, max_length=50)
+
+@app.post("/api/v2/pull-requests/analyze")
+def analyze_pr(a: PRIn, request: Request, authorization: str | None = Header(None), x_github_token: str | None = Header(None)):
+    limit(request.client.host + ":pr", n=int(os.getenv("PR_LIMIT_PER_HOUR", "20")))
+    uid = current_user(authorization); tok = x_github_token if uid else None  # same rule as audits: a token is only honoured for a verified user
+    p = integrity.parse_pr_url(a.pr_url)
+    if not p: raise HTTPException(400, "Only https://github.com/owner/repo/pull/123 URLs are accepted")
+    if any(len(g) > 200 for g in a.allowed_paths + a.protected_paths): raise HTTPException(400, "Path pattern too long")
+    owner, name, num = p
+    try:
+        with httpx.Client(base_url=GH, headers=hdr(tok), timeout=30) as c:
+            pr = prfetch.fetch_pr(c, owner, name, num)
+    except prfetch.PRFetchError as e: raise HTTPException(e.status, e.msg)
+    except httpx.HTTPError: raise HTTPException(502, "Could not reach GitHub. Try again shortly.")
+    res = integrity.analyze(pr, {"allowed_paths": a.allowed_paths, "protected_paths": a.protected_paths})
+    res.update(pr_url=f"https://github.com/{owner}/{name}/pull/{num}", task=a.task, title=pr.get("title"), demo=False)
+    return res
+
+@app.get("/api/v2/demo/{kind}")
+def demo_pr(kind: str):
+    """Labelled synthetic PRs for the showcase. The verdict is computed by the real engine, not stored."""
+    fx = {"unsafe": (demo_fixtures.UNSAFE_PR, demo_fixtures.UNSAFE_POLICY), "safe": (demo_fixtures.SAFE_PR, demo_fixtures.SAFE_POLICY)}.get(kind)
+    if not fx: raise HTTPException(404, "Unknown demo. Use 'safe' or 'unsafe'.")
+    res = integrity.analyze(*fx); res.update(demo=True, title=fx[0]["title"], pr_url=None, task="Fix authentication failure")
+    return res

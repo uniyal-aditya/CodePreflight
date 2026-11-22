@@ -80,3 +80,11 @@ Pull-request checks, SBOM export, scheduled scans, README badge, scanning older 
 
 ## Team
 Aditya Uniyal · Aditya Singh · Prince Bisht · Akshat Arya · Harshit Gupta
+
+## PR change integrity (new)
+
+Open **Analyse PR** (`/pr`) and paste a GitHub pull request link. CodePreflight checks whether the change weakens the tests, CI, security controls, permissions or agent instructions that are supposed to validate it, then reports PASS / REVIEW / BLOCK with evidence. The older repository scan stays available as **Repo scan**.
+
+- Deterministic static rules; no model decides a verdict; the pull request is read, never run.
+- Advisory only: it does not block merges on GitHub.
+- Details, rules and limitations: `docs/pr-integrity.md`. Try `GET /api/v2/demo/unsafe` for a labelled synthetic example.

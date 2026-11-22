@@ -6,6 +6,7 @@ import { Mascot } from "./ui";
 // every page is its own file and its own download: only the page you open is loaded
 const pages: Record<string, ReturnType<typeof lazy>> = {
   "/": lazy(() => import("./pages/Home")),
+  "/pr": lazy(() => import("./pages/PullRequest")),
   "/scan": lazy(() => import("./pages/Scan")),
   "/report": lazy(() => import("./pages/Report")),
   "/history": lazy(() => import("./pages/History")),

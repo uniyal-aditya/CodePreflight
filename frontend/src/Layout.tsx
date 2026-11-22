@@ -6,7 +6,7 @@ import { UserMenu } from "./RepoPicker";
 import { Mascot } from "./ui";
 import { Chat } from "./Chat";
 
-export const NAV: [string, string][] = [["/", "Home"], ["/scan", "Scan"], ["/report", "Report"], ["/history", "History"], ["/how-it-works", "How it works"], ["/learn", "Learn"], ["/about", "About"]];
+export const NAV: [string, string][] = [["/", "Home"], ["/pr", "Analyse PR"], ["/scan", "Repo scan"], ["/report", "Report"], ["/history", "History"], ["/how-it-works", "How it works"], ["/learn", "Learn"], ["/about", "About"]];
 
 export function Layout({ children }: { children: ReactNode }) {
   const path = usePath(), a = useApp(), [menu, setMenu] = useState(false);
@@ -31,7 +31,7 @@ export function Layout({ children }: { children: ReactNode }) {
         <div className="mx-auto grid max-w-6xl gap-8 px-4 py-10 sm:grid-cols-3">
           <div><div className="flex items-center gap-2"><Mascot size={30} /><b>CodePreflight</b></div><p className="mt-3 text-sm text-slate-500">Know before you ship. Checks a GitHub project for leaked keys, risky tools and missing basics, then helps you fix them.</p></div>
           <div><p className="text-sm font-semibold">Explore</p><ul className="mt-3 space-y-2 text-sm text-slate-500">{NAV.slice(1).map(([p, l]) => <li key={p}><Link to={p} className="hover:text-slate-900">{l}</Link></li>)}</ul></div>
-          <div><p className="text-sm font-semibold">Good to know</p><p className="mt-3 text-sm text-slate-500">Findings need a human to review them. A clean report is not a guarantee of safety. Your code is read, never run.</p><p className="mt-3 text-sm text-slate-500">Built by Team Limitless Arise.</p></div>
+          <div><p className="text-sm font-semibold">Good to know</p><p className="mt-3 text-sm text-slate-500">Findings need a human to review them. A clean report is not a guarantee of safety. Your code is read, never run.</p><p className="mt-3 text-sm text-slate-500">Built by Team Limitless Arise for CodeSprint 2026.</p></div>
         </div>
       </footer>
       {a.rep && <Chat key={a.rep.id} rep={a.rep} onSelect={(id) => { a.setSel(id); a.setFlt("all"); a.setErr(""); try { sessionStorage.setItem("cp.view", "tech"); } catch { /* storage blocked */ } window.dispatchEvent(new CustomEvent("cp:open-technical")); if (path !== "/report") navigate("/report"); setTimeout(() => document.getElementById("findings-anchor")?.scrollIntoView({ behavior: "smooth" }), 350); }} />}
