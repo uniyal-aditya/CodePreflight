@@ -160,3 +160,22 @@ def test_fetch_unreadable_relevant_file_is_not_verifiable():
     h = _handler()
     pr = prfetch.fetch_pr(_Client(lambda p: _R(404) if "/contents/" in p else h(p)), "o", "r", 7)
     assert I.analyze(pr)["verdict"] == "NOT_VERIFIABLE"
+
+# --- PR list + approval gate (pure helpers; the HTTP calls live in main.py)
+def _item(**kw): return {"repository_url": "https://api.github.com/repos/o/r", "number": 5, "title": "t", "user": {"login": "bob"}, "pull_request": {}, "updated_at": "2026-11-20T00:00:00Z", **kw}
+def test_search_items_parsed_and_bad_rows_dropped():
+    rows = prfetch.parse_search_items([_item(), _item(repository_url="https://evil.com/repos/o/r"), _item(number=0), _item(pull_request=None), _item(repository_url="https://api.github.com/repos/../r")])
+    assert [r["url"] for r in rows] == ["https://github.com/o/r/pull/5"] and rows[0]["author"] == "bob"
+def _res(outcome, verdict, head="b" * 40, demo=False): return {"outcome": outcome, "verdict": verdict, "demo": demo, "rules_version": "0.1", "analysis": {"head_sha": head}}
+def test_approval_gate_rules():
+    H = "b" * 40
+    assert prfetch.approval_gate(_res("PASS", "VERIFIED_SAFE"), H, False)[0] is True
+    assert prfetch.approval_gate(_res("REVIEW", "CONDITIONALLY_SAFE"), H, False)[:2] == (False, 400)
+    assert prfetch.approval_gate(_res("REVIEW", "CONDITIONALLY_SAFE"), H, True)[0] is True
+    assert prfetch.approval_gate(_res("REVIEW", "NOT_VERIFIABLE"), H, True)[0] is True
+    assert prfetch.approval_gate(_res("BLOCK", "REJECTED"), H, True)[:2] == (False, 403)       # acknowledging never overrides BLOCK
+    assert prfetch.approval_gate(_res("PASS", "VERIFIED_SAFE", head="c" * 40), H, True)[:2] == (False, 409)  # PR moved since it was checked
+    assert prfetch.approval_gate(_res("PASS", "VERIFIED_SAFE", demo=True), H, True)[0] is False
+def test_review_body_is_attributed_and_clipped():
+    b = prfetch.review_body(_res("PASS", "VERIFIED_SAFE"), "  looks   good\n to me " + "x" * 600)
+    assert b.startswith("Approved from CodePreflight") and "not a security certification" in b and len(b) < 900 and "\n\nlooks good to me" in b

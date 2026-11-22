@@ -32,3 +32,10 @@ PR title, body, branch name and added diff lines are scanned for override/exfilt
 - Heuristic regex rules: expect false positives and misses (Python/JS test syntax is covered best; other frameworks only partly).
 - Homoglyph (e.g. Cyrillic) obfuscation is not normalised. Only the first 3000 files and 80 relevant file contents are inspected; beyond that the result is NOT_VERIFIABLE.
 - No persistence, remediation, GitHub write access or Check Run yet.
+
+## Automatic list + approve (signed-in users)
+- `GET /api/v2/pull-requests?scope=review|mine|all` lists the signed-in user's open pull requests (needs a verified sign-in and the GitHub token the app already sends).
+- `POST /api/v2/pull-requests/approve` `{pr_url, head_sha, acknowledge_review, comment?, allowed_paths?, protected_paths?}` posts an approving review as the user, attached to `head_sha`.
+  The server re-runs the analysis first and never trusts a verdict from the browser. BLOCK can never be approved here; REVIEW needs `acknowledge_review`; a PR that moved since it was checked returns 409; demo results are refused. It does not merge.
+- GitHub rejects approving your own PR; that is passed through as a clear message. The review body states it came from CodePreflight, with the verdict and commit.
+- Permissions: today this uses the OAuth `repo` scope the app already offers (broad). A GitHub App with only pull-request review permission is the least-privilege replacement. Approvals are not yet written to the database audit log.

@@ -183,6 +183,21 @@ class PRIn(BaseModel):
     allowed_paths: list[str] = Field(default_factory=list, max_length=50)
     protected_paths: list[str] = Field(default_factory=list, max_length=50)
 
+def pr_result(a_urls, tok, allowed, protected):
+    owner, name, num = a_urls
+    try:
+        with httpx.Client(base_url=GH, headers=hdr(tok), timeout=30) as c:
+            pr = prfetch.fetch_pr(c, owner, name, num)
+    except prfetch.PRFetchError as e: raise HTTPException(e.status, e.msg)
+    except httpx.HTTPError: raise HTTPException(502, "Could not reach GitHub. Try again shortly.")
+    res = integrity.analyze(pr, {"allowed_paths": allowed, "protected_paths": protected})
+    res.update(pr_url=f"https://github.com/{owner}/{name}/pull/{num}", title=pr.get("title"), demo=False)
+    return res
+
+def need_github(authorization, x_github_token):
+    if not current_user(authorization) or not x_github_token: raise HTTPException(401, "Sign in with GitHub first.")
+    return x_github_token
+
 @app.post("/api/v2/pull-requests/analyze")
 def analyze_pr(a: PRIn, request: Request, authorization: str | None = Header(None), x_github_token: str | None = Header(None)):
     limit(request.client.host + ":pr", n=int(os.getenv("PR_LIMIT_PER_HOUR", "20")))
@@ -190,15 +205,56 @@ def analyze_pr(a: PRIn, request: Request, authorization: str | None = Header(Non
     p = integrity.parse_pr_url(a.pr_url)
     if not p: raise HTTPException(400, "Only https://github.com/owner/repo/pull/123 URLs are accepted")
     if any(len(g) > 200 for g in a.allowed_paths + a.protected_paths): raise HTTPException(400, "Path pattern too long")
+    res = pr_result(p, tok, a.allowed_paths, a.protected_paths)
+    res["task"] = a.task
+    return res
+
+@app.get("/api/v2/pull-requests")
+def list_prs(request: Request, scope: str = "review", authorization: str | None = Header(None), x_github_token: str | None = Header(None)):
+    """The signed-in user's open pull requests, so nobody has to paste links. scope: review | mine | all."""
+    limit(request.client.host + ":prlist", n=int(os.getenv("PR_LIST_LIMIT_PER_HOUR", "120")))
+    tok = need_github(authorization, x_github_token)
+    kind = {"review": "review-requested", "mine": "author", "all": "involves"}.get(scope)
+    if not kind: raise HTTPException(400, "scope must be review, mine or all")
+    try:
+        u = httpx.get(f"{GH}/user", headers=hdr(tok), timeout=15)
+        if u.status_code != 200: raise HTTPException(401, "GitHub did not accept your sign-in. Sign out and sign in again.")
+        r = httpx.get(f"{GH}/search/issues", headers=hdr(tok), timeout=20, params={"q": f"is:pr is:open archived:false {kind}:{u.json()['login']}", "sort": "updated", "per_page": 50})
+    except httpx.HTTPError: raise HTTPException(502, "Could not reach GitHub. Try again shortly.")
+    if r.status_code != 200: raise HTTPException(503 if r.status_code in (403, 429) else 502, "GitHub could not list your pull requests right now. Try again shortly.")
+    return {"items": prfetch.parse_search_items(r.json().get("items", [])), "scope": scope}
+
+class ApproveIn(BaseModel):
+    pr_url: str = Field(max_length=300)
+    head_sha: str = Field(pattern=r"^[0-9a-f]{40}$")  # the commit the person looked at; the approval is attached to exactly this commit
+    acknowledge_review: bool = False
+    comment: str | None = Field(None, max_length=500)
+    allowed_paths: list[str] = Field(default_factory=list, max_length=50)
+    protected_paths: list[str] = Field(default_factory=list, max_length=50)
+
+@app.post("/api/v2/pull-requests/approve")
+def approve_pr(a: ApproveIn, request: Request, authorization: str | None = Header(None), x_github_token: str | None = Header(None)):
+    """Posts an approving review as the signed-in user. Re-checks the PR on the server first; never merges."""
+    limit(request.client.host + ":prapprove", n=int(os.getenv("PR_APPROVE_LIMIT_PER_HOUR", "30")))
+    tok = need_github(authorization, x_github_token)
+    p = integrity.parse_pr_url(a.pr_url)
+    if not p: raise HTTPException(400, "Only https://github.com/owner/repo/pull/123 URLs are accepted")
+    if any(len(g) > 200 for g in a.allowed_paths + a.protected_paths): raise HTTPException(400, "Path pattern too long")
+    res = pr_result(p, tok, a.allowed_paths, a.protected_paths)  # fresh result: the browser's verdict is never trusted
+    ok, code, msg = prfetch.approval_gate(res, a.head_sha, a.acknowledge_review)
+    if not ok: raise HTTPException(code, msg)
     owner, name, num = p
     try:
-        with httpx.Client(base_url=GH, headers=hdr(tok), timeout=30) as c:
-            pr = prfetch.fetch_pr(c, owner, name, num)
-    except prfetch.PRFetchError as e: raise HTTPException(e.status, e.msg)
-    except httpx.HTTPError: raise HTTPException(502, "Could not reach GitHub. Try again shortly.")
-    res = integrity.analyze(pr, {"allowed_paths": a.allowed_paths, "protected_paths": a.protected_paths})
-    res.update(pr_url=f"https://github.com/{owner}/{name}/pull/{num}", task=a.task, title=pr.get("title"), demo=False)
-    return res
+        r = httpx.post(f"{GH}/repos/{owner}/{name}/pulls/{num}/reviews", headers=hdr(tok), timeout=20,
+                       json={"commit_id": a.head_sha, "event": "APPROVE", "body": prfetch.review_body(res, a.comment)})
+    except httpx.HTTPError: raise HTTPException(502, "Could not reach GitHub. Nothing was approved.")
+    if r.status_code == 200 and r.json().get("id"):
+        logging.info("pr approved %s/%s#%s outcome=%s", owner, name, num, res["outcome"])
+        return {"approved": True, "review_url": r.json().get("html_url"), "outcome": res["outcome"], "head_sha": a.head_sha}
+    text = (r.text or "").lower()
+    if "own pull request" in text: raise HTTPException(422, "GitHub does not let you approve your own pull request.")
+    if r.status_code in (403, 404): raise HTTPException(403, "GitHub refused the approval. Your account needs access to this repository, and CodePreflight needs the GitHub permission to review pull requests (use 'Allow approving' above).")
+    raise HTTPException(502, "GitHub did not accept the approval. Nothing was approved.")
 
 @app.get("/api/v2/demo/{kind}")
 def demo_pr(kind: str):
